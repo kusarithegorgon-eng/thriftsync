@@ -1,0 +1,88 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-cream text-ink-900 font-sans;
+    font-feature-settings: 'ss01', 'cv01';
+  }
+
+  ::selection {
+    @apply bg-terracotta-200 text-ink-900;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-ink-100;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-ink-300 rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-ink-400;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-5 py-2.5 bg-ink-900 text-cream rounded-lg font-medium text-sm transition-all duration-200 hover:bg-ink-800 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply px-5 py-2.5 bg-transparent text-ink-900 border border-ink-300 rounded-lg font-medium text-sm transition-all duration-200 hover:border-ink-900 hover:bg-ink-50 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-terracotta {
+    @apply px-5 py-2.5 bg-terracotta-500 text-white rounded-lg font-medium text-sm transition-all duration-200 hover:bg-terracotta-600 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply px-3 py-2 text-ink-700 rounded-lg font-medium text-sm transition-all duration-200 hover:bg-ink-100 hover:text-ink-900;
+  }
+
+  .card {
+    @apply bg-white rounded-2xl border border-ink-100 shadow-sm;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-2.5 bg-white border border-ink-200 rounded-lg text-sm text-ink-900 placeholder:text-ink-400 focus:outline-none focus:border-ink-900 focus:ring-1 focus:ring-ink-900 transition-colors;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .skeleton {
+    @apply bg-ink-100 animate-shimmer bg-gradient-to-r from-ink-100 via-ink-50 to-ink-100;
+    background-size: 1000px 100%;
+  }
+
+  .link-underline {
+    @apply relative after:absolute after:bottom-0 after:left-0 after:h-px after:w-0 after:bg-current after:transition-all after:duration-300 hover:after:w-full;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
