@@ -14,6 +14,7 @@ import { WishlistPage } from '@/pages/WishlistPage';
 import { OrdersPage } from '@/pages/OrdersPage';
 import { SellPage } from '@/pages/SellPage';
 import { DashboardPage } from '@/pages/DashboardPage';
+import { VouchersPage } from '@/pages/VouchersPage';
 
 function RouteRenderer() {
   const { route } = useRouter();
@@ -41,6 +42,8 @@ function RouteRenderer() {
       return <SellPage />;
     case 'dashboard':
       return <DashboardPage />;
+    case 'vouchers':
+      return <VouchersPage />;
     default:
       return <HomePage />;
   }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Gavel, Search, Heart, ShoppingBag, Menu, X, Store, User, LayoutDashboard, Package } from 'lucide-react';
+import { Gavel, Search, Heart, ShoppingBag, Menu, X, Store, User, LayoutDashboard, Package, Tag } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { useCart } from '@/lib/cart';
@@ -127,6 +127,9 @@ export function Header() {
                       <MenuItem icon={<Package className="w-4 h-4" />} onClick={() => navigate({ name: 'orders' })}>
                         My Orders
                       </MenuItem>
+                      <MenuItem icon={<Tag className="w-4 h-4" />} onClick={() => navigate({ name: 'vouchers' })}>
+                        Promo Codes
+                      </MenuItem>
                       <MenuItem icon={<Heart className="w-4 h-4" />} onClick={() => navigate({ name: 'wishlist' })}>
                         Wishlist
                       </MenuItem>
@@ -183,6 +186,9 @@ export function Header() {
               </MobileNavLink>
               <MobileNavLink onClick={() => navigate({ name: 'dashboard' })} icon={<LayoutDashboard className="w-4 h-4" />}>
                 Dashboard
+              </MobileNavLink>
+              <MobileNavLink onClick={() => navigate({ name: 'vouchers' })} icon={<Tag className="w-4 h-4" />}>
+                Promo Codes
               </MobileNavLink>
               {!user && (
                 <button
