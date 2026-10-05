@@ -173,7 +173,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
   const flawImages = allImages.filter((img) => img.is_flaw || img.angle === 'flaw');
   const angleImages = allImages.filter((img) => !img.is_flaw && img.angle !== 'flaw');
 
-  const displayPrice = isDutch && dutchPrice !== null ? dutchPrice : (isDutch ? listing.current_dutch_price ?? listing.auction_start_price : Number(listing.price));
+  const displayPrice: number = isDutch && dutchPrice !== null ? dutchPrice : (isDutch ? Number(listing.current_dutch_price ?? listing.auction_start_price ?? listing.price) : Number(listing.price));
 
   async function handleBid(e: React.FormEvent) {
     e.preventDefault();

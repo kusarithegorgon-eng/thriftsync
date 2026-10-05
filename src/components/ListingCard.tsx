@@ -1,8 +1,8 @@
-import { Gavel, Heart, Eye, BadgeCheck, Clock } from 'lucide-react';
+import { Gavel, Heart, Eye, BadgeCheck, Clock, TrendingDown } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useRouter } from '@/lib/router';
 import { supabase, type ListingWithBoutique } from '@/lib/supabase';
-import { formatPrice, formatCountdown, isAuctionActive, cn } from '@/lib/utils';
+import { formatPrice, formatCountdown, isAuctionActive, cn, computeDutchPrice } from '@/lib/utils';
 
 export function ListingCard({ listing }: { listing: ListingWithBoutique }) {
   const { navigate } = useRouter();
@@ -11,11 +11,14 @@ export function ListingCard({ listing }: { listing: ListingWithBoutique }) {
   const [bidCount, setBidCount] = useState(0);
   const [timeLeft, setTimeLeft] = useState('');
 
+  const [dutchPrice, setDutchPrice] = useState<number | null>(null);
+
   const isAuction = listing.listing_type === 'auction';
+  const isDutch = isAuction && listing.auction_mode === 'DUTCH';
   const auctionActive = isAuctionActive(listing);
 
   useEffect(() => {
-    if (isAuction) {
+    if (isAuction && !isDutch) {
       supabase
         .from('bids')
         .select('amount')
@@ -28,18 +31,38 @@ export function ListingCard({ listing }: { listing: ListingWithBoutique }) {
           }
         });
     }
-  }, [listing.id, isAuction]);
+  }, [listing.id, isAuction, isDutch]);
 
   useEffect(() => {
-    if (isAuction && listing.auction_end_at) {
+    if (isAuction && listing.auction_end_at && !isDutch) {
       const update = () => setTimeLeft(formatCountdown(listing.auction_end_at!));
       update();
       const interval = setInterval(update, 1000);
       return () => clearInterval(interval);
     }
-  }, [isAuction, listing.auction_end_at]);
+  }, [isAuction, isDutch, listing.auction_end_at]);
 
-  const displayPrice = isAuction ? (currentBid ?? Number(listing.price)) : Number(listing.price);
+  // Dutch auction live price decay
+  useEffect(() => {
+    if (!isDutch || !listing.auction_start_price || !listing.dutch_floor_price || !listing.decrement_rate) return;
+    const update = () => {
+      const computed = computeDutchPrice(
+        listing.auction_start_price!,
+        listing.dutch_floor_price!,
+        listing.decrement_rate!,
+        listing.decrement_interval_minutes,
+        listing.created_at,
+      );
+      setDutchPrice(computed);
+    };
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [isDutch, listing.auction_start_price, listing.dutch_floor_price, listing.decrement_rate, listing.decrement_interval_minutes, listing.created_at]);
+
+  const displayPrice = isDutch
+    ? (dutchPrice ?? Number(listing.current_dutch_price ?? listing.auction_start_price))
+    : isAuction ? (currentBid ?? Number(listing.price)) : Number(listing.price);
 
   return (
     <div
@@ -62,10 +85,16 @@ export function ListingCard({ listing }: { listing: ListingWithBoutique }) {
 
         {/* Top badges */}
         <div className="absolute top-2 left-2 flex flex-col gap-1.5">
-          {isAuction && (
+          {isAuction && !isDutch && (
             <span className="badge bg-terracotta-500 text-white">
               <Gavel className="w-3 h-3" />
               Auction
+            </span>
+          )}
+          {isDutch && (
+            <span className="badge bg-ink-900 text-cream">
+              <TrendingDown className="w-3 h-3" />
+              Dutch Auction
             </span>
           )}
           {listing.coa_verified && (
@@ -91,11 +120,19 @@ export function ListingCard({ listing }: { listing: ListingWithBoutique }) {
         </button>
 
         {/* Auction countdown overlay */}
-        {isAuction && auctionActive && timeLeft && (
+        {isAuction && !isDutch && auctionActive && timeLeft && (
           <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-ink-950/80 to-transparent p-3">
             <div className="flex items-center gap-1.5 text-cream text-xs font-mono">
               <Clock className="w-3 h-3" />
               <span>{timeLeft}</span>
+            </div>
+          </div>
+        )}
+        {isDutch && auctionActive && (
+          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-ink-950/80 to-transparent p-3">
+            <div className="flex items-center gap-1.5 text-cream text-xs font-mono">
+              <TrendingDown className="w-3 h-3" />
+              <span>{formatPrice(displayPrice)}</span>
             </div>
           </div>
         )}
@@ -114,9 +151,9 @@ export function ListingCard({ listing }: { listing: ListingWithBoutique }) {
             {isAuction ? (
               <div>
                 <p className="text-[10px] text-ink-500 uppercase tracking-wide">
-                  {bidCount > 0 ? `${bidCount} bid${bidCount > 1 ? 's' : ''}` : 'Starting at'}
+                  {isDutch ? 'Current Price' : bidCount > 0 ? `${bidCount} bid${bidCount > 1 ? 's' : ''}` : 'Starting at'}
                 </p>
-                <p className="text-base font-semibold text-ink-900">{formatPrice(displayPrice)}</p>
+                <p className={cn('text-base font-semibold', isDutch ? 'text-ink-900' : 'text-ink-900')}>{formatPrice(displayPrice)}</p>
               </div>
             ) : (
               <p className="text-base font-semibold text-ink-900">{formatPrice(displayPrice)}</p>

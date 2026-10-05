@@ -20,6 +20,7 @@ export function BrowsePage() {
   const [selectedEras, setSelectedEras] = useState<string[]>(initialEra ? [initialEra] : []);
   const [selectedConditions, setSelectedConditions] = useState<string[]>([]);
   const [auctionOnly, setAuctionOnly] = useState(false);
+  const [dutchOnly, setDutchOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState(initialQ || '');
 
   useEffect(() => {
@@ -48,6 +49,9 @@ export function BrowsePage() {
       if (auctionOnly) {
         query = query.eq('listing_type', 'auction');
       }
+      if (dutchOnly) {
+        query = query.eq('auction_mode', 'DUTCH');
+      }
       if (searchQuery) {
         query = query.or(`title.ilike.%${searchQuery}%,description.ilike.%${searchQuery}%`);
       }
@@ -74,7 +78,7 @@ export function BrowsePage() {
       setLoading(false);
     }
     load();
-  }, [selectedCategories, selectedEras, selectedConditions, auctionOnly, searchQuery, sortBy]);
+  }, [selectedCategories, selectedEras, selectedConditions, auctionOnly, dutchOnly, searchQuery, sortBy]);
 
   function toggleArrayValue(arr: string[], value: string): string[] {
     return arr.includes(value) ? arr.filter((v) => v !== value) : [...arr, value];
@@ -85,12 +89,13 @@ export function BrowsePage() {
     setSelectedEras([]);
     setSelectedConditions([]);
     setAuctionOnly(false);
+    setDutchOnly(false);
     setSearchQuery('');
     navigate({ name: 'browse' });
   }
 
   const activeFilterCount =
-    selectedCategories.length + selectedEras.length + selectedConditions.length + (auctionOnly ? 1 : 0) + (searchQuery ? 1 : 0);
+    selectedCategories.length + selectedEras.length + selectedConditions.length + (auctionOnly ? 1 : 0) + (dutchOnly ? 1 : 0) + (searchQuery ? 1 : 0);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
@@ -138,10 +143,12 @@ export function BrowsePage() {
               selectedEras={selectedEras}
               selectedConditions={selectedConditions}
               auctionOnly={auctionOnly}
+              dutchOnly={dutchOnly}
               onToggleCategory={(v) => setSelectedCategories((prev) => toggleArrayValue(prev, v))}
               onToggleEra={(v) => setSelectedEras((prev) => toggleArrayValue(prev, v))}
               onToggleCondition={(v) => setSelectedConditions((prev) => toggleArrayValue(prev, v))}
               onToggleAuction={() => setAuctionOnly(!auctionOnly)}
+              onToggleDutch={() => setDutchOnly(!dutchOnly)}
               onClear={clearFilters}
             />
           </aside>
@@ -162,10 +169,12 @@ export function BrowsePage() {
                 selectedEras={selectedEras}
                 selectedConditions={selectedConditions}
                 auctionOnly={auctionOnly}
+                dutchOnly={dutchOnly}
                 onToggleCategory={(v) => setSelectedCategories((prev) => toggleArrayValue(prev, v))}
                 onToggleEra={(v) => setSelectedEras((prev) => toggleArrayValue(prev, v))}
                 onToggleCondition={(v) => setSelectedConditions((prev) => toggleArrayValue(prev, v))}
                 onToggleAuction={() => setAuctionOnly(!auctionOnly)}
+                onToggleDutch={() => setDutchOnly(!dutchOnly)}
                 onClear={clearFilters}
               />
             </div>
@@ -187,6 +196,7 @@ export function BrowsePage() {
                 <FilterChip key={c} label={c} onRemove={() => setSelectedConditions((prev) => prev.filter((v) => v !== c))} />
               ))}
               {auctionOnly && <FilterChip label="Auctions Only" onRemove={() => setAuctionOnly(false)} />}
+              {dutchOnly && <FilterChip label="Dutch Auctions" onRemove={() => setDutchOnly(false)} />}
             </div>
             <select
               value={sortBy}
@@ -226,10 +236,12 @@ function FilterPanel(props: {
   selectedEras: string[];
   selectedConditions: string[];
   auctionOnly: boolean;
+  dutchOnly: boolean;
   onToggleCategory: (v: string) => void;
   onToggleEra: (v: string) => void;
   onToggleCondition: (v: string) => void;
   onToggleAuction: () => void;
+  onToggleDutch: () => void;
   onClear: () => void;
 }) {
   return (
@@ -277,6 +289,11 @@ function FilterPanel(props: {
           label="Auction items only"
           checked={props.auctionOnly}
           onChange={props.onToggleAuction}
+        />
+        <FilterCheckbox
+          label="Dutch auctions (descending price)"
+          checked={props.dutchOnly}
+          onChange={props.onToggleDutch}
         />
       </FilterGroup>
     </div>
