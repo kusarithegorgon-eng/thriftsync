@@ -20,6 +20,9 @@ export type Profile = {
   display_name: string;
   avatar_url: string | null;
   bio: string | null;
+  default_lat: number | null;
+  default_lng: number | null;
+  default_barangay: string | null;
   created_at: string;
 };
 
@@ -33,11 +36,27 @@ export type Boutique = {
   banner_url: string | null;
   logo_url: string | null;
   location: string | null;
+  lat: number | null;
+  lng: number | null;
+  barangay: string | null;
+  pickup_available: boolean;
+  courier_delivery: boolean;
   policies: string | null;
   rating_avg: number;
   rating_count: number;
   created_at: string;
 };
+
+export type ImageAngle = 'front' | 'back' | 'left' | 'right' | 'detail' | 'flaw' | 'tag' | 'other';
+
+export type ImageMetadata = {
+  url: string;
+  angle: ImageAngle;
+  is_flaw: boolean;
+  caption?: string;
+};
+
+export type AuctionMode = 'ENGLISH' | 'DUTCH';
 
 export type Listing = {
   id: string;
@@ -50,9 +69,17 @@ export type Listing = {
   condition_grade: 'Mint' | 'Excellent' | 'Good' | 'Fair' | 'Distressed' | null;
   material: string | null;
   images: string[];
+  image_metadata: ImageMetadata[] | null;
   listing_type: 'fixed' | 'auction';
+  auction_mode: AuctionMode;
   auction_end_at: string | null;
+  auction_start_price: number | null;
   reserve_price: number | null;
+  increment_step: number | null;
+  decrement_rate: number | null;
+  decrement_interval_minutes: number;
+  current_dutch_price: number | null;
+  dutch_floor_price: number | null;
   status: 'active' | 'sold' | 'draft';
   sku: string | null;
   coa_verified: boolean;
@@ -200,4 +227,26 @@ export type VoucherValidationResult = {
   discount_amount: number;
   scope: VoucherScope | null;
   message: string;
+};
+
+export type CebuBarangay = {
+  id: string;
+  name: string;
+  city_municipality: string;
+  lat: number;
+  lng: number;
+  is_metro_cebu: boolean;
+};
+
+export type GeofenceResult = {
+  within_cebu: boolean;
+  nearest_barangay: CebuBarangay | null;
+  message: string;
+};
+
+export type BidResult = {
+  success: boolean;
+  min_next_bid: number | null;
+  message: string;
+  new_current_bid: number | null;
 };

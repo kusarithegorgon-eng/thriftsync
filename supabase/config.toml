@@ -1,0 +1,5 @@
+[functions.generate-upload-url]
+verify_jwt = true
+
+[functions.auction-ops]
+verify_jwt = true

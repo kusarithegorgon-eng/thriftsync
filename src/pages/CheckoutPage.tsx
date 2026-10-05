@@ -1,10 +1,13 @@
-import { useState } from 'react';
-import { Shield, Check, ArrowLeft, Leaf, Truck, Tag, X, AlertCircle } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Shield, Check, ArrowLeft, Leaf, Truck, Tag, X, AlertCircle, MapPin, Package, Navigation } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { useCart } from '@/lib/cart';
-import { supabase, type Voucher } from '@/lib/supabase';
-import { formatPrice } from '@/lib/utils';
+import { supabase, type Voucher, type Boutique, type CebuBarangay } from '@/lib/supabase';
+import { formatPrice, CEBU_BARANGAYS, isWithinCebu, findNearestBarangay, haversineDistance, cn } from '@/lib/utils';
+import { CebuMap } from '@/components/CebuMap';
+
+type DeliveryMode = 'courier' | 'pickup';
 
 export function CheckoutPage() {
   const { navigate } = useRouter();
@@ -13,17 +16,69 @@ export function CheckoutPage() {
   const [step, setStep] = useState<'shipping' | 'review' | 'complete'>('shipping');
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
-  const [city, setCity] = useState('');
-  const [zip, setZip] = useState('');
-  const [country, setCountry] = useState('United States');
+  const [barangay, setBarangay] = useState('');
+  const [city, setCity] = useState('Cebu City');
+  const [lat, setLat] = useState<number | null>(null);
+  const [lng, setLng] = useState<number | null>(null);
+  const [deliveryMode, setDeliveryMode] = useState<DeliveryMode>('courier');
   const [processing, setProcessing] = useState(false);
   const [voucherCode, setVoucherCode] = useState('');
   const [voucherError, setVoucherError] = useState<string | null>(null);
   const [voucherLoading, setVoucherLoading] = useState(false);
+  const [geoError, setGeoError] = useState<string | null>(null);
+  const [pickupBoutiques, setPickupBoutiques] = useState<Boutique[]>([]);
+  const [selectedPickupBoutique, setSelectedPickupBoutique] = useState<string | null>(null);
 
   const hasAuctionItems = items.some((i) => i.listing.listing_type === 'auction');
   const boutiqueIds = items.map((i) => i.listing.boutique_id).filter(Boolean) as string[];
   const categories = items.map((i) => i.listing.category).filter(Boolean) as string[];
+
+  useEffect(() => {
+    async function loadPickupBoutiques() {
+      if (boutiqueIds.length === 0) return;
+      const { data } = await supabase
+        .from('boutiques')
+        .select('*')
+        .in('id', boutiqueIds)
+        .eq('pickup_available', true)
+        .not('lat', 'is', null)
+        .not('lng', 'is', null);
+      setPickupBoutiques((data as Boutique[]) || []);
+    }
+    loadPickupBoutiques();
+  }, [boutiqueIds.length]);
+
+  const barangays = CEBU_BARANGAYS.filter((b) => b.city === city);
+  const selectedPickup = pickupBoutiques.find((b) => b.id === selectedPickupBoutique);
+
+  function handleBarangaySelect(selectedName: string) {
+    setBarangay(selectedName);
+    const b = CEBU_BARANGAYS.find((x) => x.name === selectedName && x.city === city);
+    if (b) {
+      setLat(b.lat);
+      setLng(b.lng);
+      setGeoError(null);
+    }
+  }
+
+  function handleMapClick(clickedLat: number, clickedLng: number) {
+    setLat(clickedLat);
+    setLng(clickedLng);
+    if (isWithinCebu(clickedLat, clickedLng)) {
+      const nearest = findNearestBarangay(clickedLat, clickedLng);
+      if (nearest) {
+        setBarangay(nearest.name);
+        setCity(nearest.city);
+      }
+      setGeoError(null);
+    } else {
+      setGeoError('Selected location is outside Cebu. Only Cebu addresses are supported.');
+    }
+  }
+
+  const pickupDistance = selectedPickup && lat && lng && selectedPickup.lat && selectedPickup.lng
+    ? haversineDistance(lat, lng, selectedPickup.lat, selectedPickup.lng)
+    : null;
 
   async function handleApplyVoucher(e: React.FormEvent) {
     e.preventDefault();
@@ -74,6 +129,10 @@ export function CheckoutPage() {
     setAppliedVoucher(null, 0);
   }
 
+  const cebuAddressValid = deliveryMode === 'pickup'
+    ? !!selectedPickupBoutique
+    : name && address && barangay && lat && lng && isWithinCebu(lat, lng);
+
   async function handlePlaceOrder() {
     if (!user) {
       navigate({ name: 'auth' });
@@ -81,7 +140,9 @@ export function CheckoutPage() {
     }
     setProcessing(true);
 
-    const fullAddress = `${name}, ${address}, ${city} ${zip}, ${country}`;
+    const fullAddress = deliveryMode === 'pickup'
+      ? `PICKUP at ${selectedPickup?.name || 'boutique'}, ${selectedPickup?.barangay || ''}, ${selectedPickup?.location || 'Cebu'}`
+      : `${name}, ${address}, ${barangay}, ${city}, Cebu, Philippines (${lat?.toFixed(4)}, ${lng?.toFixed(4)})`;
 
     for (const item of items) {
       await supabase.from('orders').insert({
@@ -129,16 +190,10 @@ export function CheckoutPage() {
         </div>
         <h1 className="font-serif text-2xl font-bold text-ink-900 mb-2">Order Placed Successfully</h1>
         <p className="text-sm text-ink-500 mb-6">
-          Your payment is held in escrow and will be released to the seller once you confirm delivery.
+          {deliveryMode === 'pickup'
+            ? 'Your items are ready for pickup at the boutique in Cebu. Coordinate with the seller for pickup details.'
+            : 'Your items will be delivered via local courier within Cebu. Payment is held in escrow until delivery confirmation.'}
         </p>
-        <div className="card p-4 max-w-md mx-auto mb-6 text-left">
-          <div className="flex items-center gap-2 text-sm text-ink-600 mb-2">
-            <Shield className="w-4 h-4 text-sage-600" /> Escrow Active
-          </div>
-          <p className="text-xs text-ink-500">
-            Funds are securely held until you receive your items. You'll have 7 days after delivery to raise any disputes.
-          </p>
-        </div>
         <div className="flex gap-3 justify-center">
           <button onClick={() => navigate({ name: 'orders' })} className="btn-primary">View Orders</button>
           <button onClick={() => navigate({ name: 'browse' })} className="btn-secondary">Continue Shopping</button>
@@ -167,36 +222,155 @@ export function CheckoutPage() {
         <div className="lg:col-span-2">
           {step === 'shipping' && (
             <div className="card p-6 animate-slide-down">
-              <h2 className="text-sm font-medium text-ink-900 mb-4">Shipping Address</h2>
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs font-medium text-ink-700 mb-1.5 block">Full Name</label>
-                  <input type="text" value={name} onChange={(e) => setName(e.target.value)} className="input-field" required />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-ink-700 mb-1.5 block">Street Address</label>
-                  <input type="text" value={address} onChange={(e) => setAddress(e.target.value)} className="input-field" required />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-medium text-ink-700 mb-1.5 block">City</label>
-                    <input type="text" value={city} onChange={(e) => setCity(e.target.value)} className="input-field" required />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-ink-700 mb-1.5 block">ZIP / Postal Code</label>
-                    <input type="text" value={zip} onChange={(e) => setZip(e.target.value)} className="input-field" required />
-                  </div>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-ink-700 mb-1.5 block">Country</label>
-                  <select value={country} onChange={(e) => setCountry(e.target.value)} className="input-field">
-                    <option>United States</option>
-                    <option>Canada</option>
-                    <option>United Kingdom</option>
-                    <option>Australia</option>
-                  </select>
-                </div>
+              <div className="flex items-center gap-2 mb-4 p-2.5 bg-terracotta-50 rounded-lg border border-terracotta-200">
+                <MapPin className="w-4 h-4 text-terracotta-600 shrink-0" />
+                <p className="text-xs text-terracotta-700">This marketplace is exclusive to Cebu, Philippines. All deliveries and pickups are within Cebu only.</p>
               </div>
+
+              {/* Delivery mode toggle */}
+              <div className="grid grid-cols-2 gap-2 mb-5">
+                <button
+                  onClick={() => setDeliveryMode('courier')}
+                  className={cn(
+                    'flex items-center gap-2 p-3 rounded-lg border-2 transition-colors text-sm font-medium',
+                    deliveryMode === 'courier' ? 'border-ink-900 bg-ink-50 text-ink-900' : 'border-ink-200 text-ink-500 hover:border-ink-300',
+                  )}
+                >
+                  <Truck className="w-4 h-4" /> Local Courier Delivery
+                </button>
+                <button
+                  onClick={() => setDeliveryMode('pickup')}
+                  disabled={pickupBoutiques.length === 0}
+                  className={cn(
+                    'flex items-center gap-2 p-3 rounded-lg border-2 transition-colors text-sm font-medium',
+                    deliveryMode === 'pickup' ? 'border-ink-900 bg-ink-50 text-ink-900' : 'border-ink-200 text-ink-500 hover:border-ink-300',
+                    pickupBoutiques.length === 0 && 'opacity-50 cursor-not-allowed',
+                  )}
+                >
+                  <Package className="w-4 h-4" /> Local Pickup
+                  {pickupBoutiques.length === 0 && <span className="text-[10px] text-ink-400">(none available)</span>}
+                </button>
+              </div>
+
+              {deliveryMode === 'courier' ? (
+                <>
+                  <h2 className="text-sm font-medium text-ink-900 mb-4">Delivery Address (Cebu Only)</h2>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-xs font-medium text-ink-700 mb-1.5 block">Full Name</label>
+                      <input type="text" value={name} onChange={(e) => setName(e.target.value)} className="input-field" placeholder="Your name" required />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-ink-700 mb-1.5 block">Street Address</label>
+                      <input type="text" value={address} onChange={(e) => setAddress(e.target.value)} className="input-field" placeholder="House #, Street, Purok" required />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs font-medium text-ink-700 mb-1.5 block">City / Municipality</label>
+                        <select value={city} onChange={(e) => { setCity(e.target.value); setBarangay(''); }} className="input-field">
+                          {[...new Set(CEBU_BARANGAYS.map((b) => b.city))].map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-ink-700 mb-1.5 block">Barangay</label>
+                        <select value={barangay} onChange={(e) => handleBarangaySelect(e.target.value)} className="input-field" required>
+                          <option value="">Select barangay...</option>
+                          {barangays.map((b) => (
+                            <option key={b.name} value={b.name}>{b.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Interactive Map for drop-off pin */}
+                  <div className="mt-4">
+                    <label className="text-xs font-medium text-ink-700 mb-1.5 block flex items-center gap-1.5">
+                      <Navigation className="w-3.5 h-3.5" /> Drop-off Location (click map to pin)
+                    </label>
+                    {lat && lng ? (
+                      <CebuMap
+                        buyerLat={lat}
+                        buyerLng={lng}
+                        onMapClick={handleMapClick}
+                        interactive
+                        height="280px"
+                      />
+                    ) : (
+                      <CebuMap
+                        onMapClick={handleMapClick}
+                        interactive
+                        height="280px"
+                      />
+                    )}
+                    {lat && lng && (
+                      <p className="text-xs text-sage-600 mt-2 flex items-center gap-1">
+                        <Check className="w-3 h-3" /> Pinned at {lat.toFixed(4)}, {lng.toFixed(4)}
+                        {isWithinCebu(lat, lng) ? ' — within Cebu' : ' — outside Cebu!'}
+                      </p>
+                    )}
+                    {geoError && (
+                      <p className="text-xs text-terracotta-600 flex items-center gap-1 mt-2">
+                        <AlertCircle className="w-3 h-3" />{geoError}
+                      </p>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h2 className="text-sm font-medium text-ink-900 mb-4">Select Pickup Location</h2>
+                  <div className="space-y-2 mb-4">
+                    {pickupBoutiques.map((b) => (
+                      <button
+                        key={b.id}
+                        onClick={() => setSelectedPickupBoutique(b.id)}
+                        className={cn(
+                          'w-full flex items-center gap-3 p-3 rounded-lg border-2 transition-colors text-left',
+                          selectedPickupBoutique === b.id ? 'border-ink-900 bg-ink-50' : 'border-ink-200 hover:border-ink-300',
+                        )}
+                      >
+                        <div className="w-10 h-10 rounded-full bg-sage-500 text-cream flex items-center justify-center text-xs font-bold shrink-0">
+                          {b.name.charAt(0)}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-ink-900">{b.name}</p>
+                          <p className="text-xs text-ink-500">{b.barangay || b.location || 'Cebu'}</p>
+                        </div>
+                        {selectedPickupBoutique === b.id && <Check className="w-4 h-4 text-sage-600" />}
+                      </button>
+                    ))}
+                  </div>
+
+                  {selectedPickup && selectedPickup.lat && selectedPickup.lng && (
+                    <div>
+                      <label className="text-xs font-medium text-ink-700 mb-1.5 block flex items-center gap-1.5">
+                        <MapPin className="w-3.5 h-3.5" /> Pickup Location Map
+                      </label>
+                      <CebuMap
+                        pickupLat={selectedPickup.lat}
+                        pickupLng={selectedPickup.lng}
+                        pickupLabel={selectedPickup.name}
+                        buyerLat={lat}
+                        buyerLng={lng}
+                        onMapClick={handleMapClick}
+                        interactive
+                        showDistance
+                        height="300px"
+                      />
+                      {pickupDistance !== null && (
+                        <p className="text-xs text-ink-500 mt-2 flex items-center gap-1">
+                          <Navigation className="w-3 h-3" />
+                          {pickupDistance < 1
+                            ? `${Math.round(pickupDistance * 1000)} m from your pinned location`
+                            : `${pickupDistance.toFixed(1)} km from your pinned location`}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
 
               {/* Voucher input */}
               <div className="mt-5 pt-5 border-t border-ink-100">
@@ -248,7 +422,7 @@ export function CheckoutPage() {
 
               <div className="flex gap-2 mt-4">
                 <div className="flex items-center gap-1.5 text-xs text-ink-500">
-                  <Truck className="w-3.5 h-3.5" /> Free tracked shipping
+                  <Truck className="w-3.5 h-3.5" /> {deliveryMode === 'pickup' ? 'Local pickup in Cebu' : 'Local courier within Cebu'}
                 </div>
                 <div className="flex items-center gap-1.5 text-xs text-ink-500">
                   <Leaf className="w-3.5 h-3.5" /> Carbon offset included
@@ -257,9 +431,10 @@ export function CheckoutPage() {
 
               <button
                 onClick={() => {
-                  if (name && address && city && zip) setStep('review');
+                  if (cebuAddressValid) setStep('review');
                 }}
-                className="w-full btn-primary mt-5 py-3"
+                disabled={!cebuAddressValid}
+                className="w-full btn-primary mt-5 py-3 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Continue to Review
               </button>
@@ -297,9 +472,29 @@ export function CheckoutPage() {
               )}
 
               <div className="bg-ink-50 rounded-lg p-3 mb-4 text-sm">
-                <p className="text-xs font-medium text-ink-700 mb-1">Ship to:</p>
-                <p className="text-xs text-ink-600">{name}, {address}, {city} {zip}, {country}</p>
+                <p className="text-xs font-medium text-ink-700 mb-1">
+                  {deliveryMode === 'pickup' ? 'Pickup at:' : 'Deliver to:'}
+                </p>
+                <p className="text-xs text-ink-600">
+                  {deliveryMode === 'pickup'
+                    ? `${selectedPickup?.name}, ${selectedPickup?.barangay || ''}, ${selectedPickup?.location || 'Cebu'}`
+                    : `${name}, ${address}, ${barangay}, ${city}, Cebu, Philippines`}
+                </p>
               </div>
+
+              {selectedPickup && selectedPickup.lat && selectedPickup.lng && deliveryMode === 'pickup' && (
+                <div className="mb-4">
+                  <CebuMap
+                    pickupLat={selectedPickup.lat}
+                    pickupLng={selectedPickup.lng}
+                    pickupLabel={selectedPickup.name}
+                    buyerLat={lat}
+                    buyerLng={lng}
+                    showDistance
+                    height="200px"
+                  />
+                </div>
+              )}
 
               <div className="flex items-center gap-2 mb-4 p-3 bg-sage-50 rounded-lg">
                 <Shield className="w-5 h-5 text-sage-600 shrink-0" />
@@ -333,8 +528,8 @@ export function CheckoutPage() {
                 </div>
               )}
               <div className="flex justify-between text-ink-600">
-                <span>Shipping</span>
-                <span className="text-sage-600">Free</span>
+                <span>{deliveryMode === 'pickup' ? 'Pickup' : 'Courier Delivery'}</span>
+                <span className="text-sage-600">{deliveryMode === 'pickup' ? 'Free' : 'Free'}</span>
               </div>
               <div className="border-t border-ink-100 pt-2 mt-2 flex justify-between font-semibold text-ink-900">
                 <span>Total</span>

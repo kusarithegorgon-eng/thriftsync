@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
-import { Gavel, Heart, BadgeCheck, Eye, Clock, MapPin, MessageCircle, ArrowLeft, Shield, Truck, Leaf, ChevronRight, AlertCircle } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { Gavel, Heart, BadgeCheck, Eye, Clock, MapPin, MessageCircle, ArrowLeft, Shield, Truck, Leaf, ChevronRight, AlertCircle, TrendingDown, Zap, Camera } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { useCart } from '@/lib/cart';
-import { supabase, type Listing, type Boutique, type Bid, type Review, type ListingWithBoutique } from '@/lib/supabase';
-import { formatPrice, formatPriceDetailed, formatCountdown, isAuctionActive, formatTimeAgo, cn } from '@/lib/utils';
+import { supabase, type Listing, type Boutique, type Bid, type Review, type ListingWithBoutique, type ImageMetadata, type BidResult } from '@/lib/supabase';
+import { formatPrice, formatPriceDetailed, formatCountdown, isAuctionActive, formatTimeAgo, cn, getMinNextBid, getIncrementTierLabel, computeDutchPrice, getNextDropTime } from '@/lib/utils';
 import { ListingCard } from '@/components/ListingCard';
 
 export function ListingDetailPage({ listingId }: { listingId: string }) {
@@ -22,72 +22,74 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
   const [bidAmount, setBidAmount] = useState('');
   const [bidError, setBidError] = useState<string | null>(null);
   const [bidSuccess, setBidSuccess] = useState(false);
+  const [bidding, setBidding] = useState(false);
   const [timeLeft, setTimeLeft] = useState('');
   const [showMessageForm, setShowMessageForm] = useState(false);
   const [messageBody, setMessageBody] = useState('');
+  const [dutchPrice, setDutchPrice] = useState<number | null>(null);
+  const [nextDropIn, setNextDropIn] = useState('');
+  const [claiming, setClaiming] = useState(false);
+  const [claimError, setClaimError] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true);
-      const { data: listingData } = await supabase
-        .from('listings')
-        .select('*')
-        .eq('id', listingId)
-        .maybeSingle();
+  const loadListing = useCallback(async () => {
+    setLoading(true);
+    const { data: listingData } = await supabase
+      .from('listings')
+      .select('*')
+      .eq('id', listingId)
+      .maybeSingle();
 
-      if (!listingData) {
-        setLoading(false);
-        return;
-      }
-
-      setListing(listingData as Listing);
-
-      // Increment views
-      await supabase
-        .from('listings')
-        .update({ views: (listingData as Listing).views + 1 })
-        .eq('id', listingId);
-
-      // Load boutique
-      const { data: boutiqueData } = await supabase
-        .from('boutiques')
-        .select('*')
-        .eq('id', (listingData as Listing).boutique_id)
-        .maybeSingle();
-      setBoutique(boutiqueData as Boutique);
-
-      // Load bids
-      const { data: bidsData } = await supabase
-        .from('bids')
-        .select('*')
-        .eq('listing_id', listingId)
-        .order('amount', { ascending: false });
-      setBids((bidsData as Bid[]) || []);
-
-      // Load related listings
-      const { data: related } = await supabase
-        .from('listings')
-        .select('*, boutiques(id, name, slug, logo_url)')
-        .eq('status', 'active')
-        .neq('id', listingId)
-        .or(`category.eq.${(listingData as Listing).category},era.eq.${(listingData as Listing).era}`)
-        .limit(4);
-      setRelatedListings(related || []);
-
-      // Load reviews for this boutique
-      const { data: reviewData } = await supabase
-        .from('reviews')
-        .select('*')
-        .eq('boutique_id', (listingData as Listing).boutique_id)
-        .order('created_at', { ascending: false })
-        .limit(3);
-      setReviews((reviewData as Review[]) || []);
-
+    if (!listingData) {
       setLoading(false);
+      return;
     }
-    load();
+
+    setListing(listingData as Listing);
+
+    await supabase
+      .from('listings')
+      .update({ views: (listingData as Listing).views + 1 })
+      .eq('id', listingId);
+
+    const { data: boutiqueData } = await supabase
+      .from('boutiques')
+      .select('*')
+      .eq('id', (listingData as Listing).boutique_id)
+      .maybeSingle();
+    setBoutique(boutiqueData as Boutique);
+
+    const { data: bidsData } = await supabase
+      .from('bids')
+      .select('*')
+      .eq('listing_id', listingId)
+      .order('amount', { ascending: false });
+    setBids((bidsData as Bid[]) || []);
+
+    const { data: related } = await supabase
+      .from('listings')
+      .select('*, boutiques(id, name, slug, logo_url)')
+      .eq('status', 'active')
+      .neq('id', listingId)
+      .or(`category.eq.${(listingData as Listing).category},era.eq.${(listingData as Listing).era}`)
+      .limit(4);
+    setRelatedListings(related || []);
+
+    const { data: reviewData } = await supabase
+      .from('reviews')
+      .select('*')
+      .eq('boutique_id', (listingData as Listing).boutique_id)
+      .order('created_at', { ascending: false })
+      .limit(3);
+    setReviews((reviewData as Review[]) || []);
+
+    setLoading(false);
   }, [listingId]);
 
+  useEffect(() => {
+    loadListing();
+  }, [loadListing]);
+
+  // Countdown timer for English auctions
   useEffect(() => {
     if (listing?.auction_end_at && listing.listing_type === 'auction') {
       const update = () => setTimeLeft(formatCountdown(listing.auction_end_at!));
@@ -95,6 +97,39 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
       const interval = setInterval(update, 1000);
       return () => clearInterval(interval);
     }
+  }, [listing]);
+
+  // Dutch auction live price decay
+  useEffect(() => {
+    if (!listing || listing.listing_type !== 'auction' || listing.auction_mode !== 'DUTCH') return;
+    if (!listing.auction_start_price || !listing.dutch_floor_price || !listing.decrement_rate) return;
+
+    const update = () => {
+      const computed = computeDutchPrice(
+        listing.auction_start_price!,
+        listing.dutch_floor_price!,
+        listing.decrement_rate!,
+        listing.decrement_interval_minutes,
+        listing.created_at,
+      );
+      setDutchPrice(computed);
+
+      const nextDrop = getNextDropTime(listing.decrement_interval_minutes, listing.created_at);
+      if (nextDrop) {
+        const diff = nextDrop.getTime() - Date.now();
+        if (diff > 0) {
+          const mins = Math.floor(diff / 60000);
+          const secs = Math.floor((diff % 60000) / 1000);
+          setNextDropIn(`${mins}m ${secs}s`);
+        } else {
+          setNextDropIn('Dropping now...');
+        }
+      }
+    };
+
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
   }, [listing]);
 
   if (loading) {
@@ -123,10 +158,22 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
   }
 
   const isAuction = listing.listing_type === 'auction';
+  const isDutch = isAuction && listing.auction_mode === 'DUTCH';
   const auctionActive = isAuctionActive(listing);
   const currentBid = bids.length > 0 ? Number(bids[0].amount) : Number(listing.price);
-  const minNextBid = currentBid + Math.max(5, Math.ceil(currentBid * 0.05));
-  const images = listing.images || [];
+  const minNextBid = getMinNextBid(currentBid, listing.increment_step);
+  const incrementLabel = getIncrementTierLabel(currentBid);
+
+  // Image metadata with structured angle/flaw info
+  const imageMeta: ImageMetadata[] = listing.image_metadata || [];
+  const allImages = imageMeta.length > 0
+    ? imageMeta
+    : (listing.images || []).map((url, i) => ({ url, angle: i === 0 ? 'front' : 'other', is_flaw: false } as ImageMetadata));
+
+  const flawImages = allImages.filter((img) => img.is_flaw || img.angle === 'flaw');
+  const angleImages = allImages.filter((img) => !img.is_flaw && img.angle !== 'flaw');
+
+  const displayPrice = isDutch && dutchPrice !== null ? dutchPrice : (isDutch ? listing.current_dutch_price ?? listing.auction_start_price : Number(listing.price));
 
   async function handleBid(e: React.FormEvent) {
     e.preventDefault();
@@ -139,33 +186,44 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
     }
 
     const amount = parseFloat(bidAmount);
-    if (isNaN(amount) || amount < minNextBid) {
-      setBidError(`Minimum bid is ${formatPriceDetailed(minNextBid)}`);
+    if (isNaN(amount)) {
+      setBidError('Enter a valid bid amount');
       return;
     }
 
-    // Unmark previous winning bids
-    await supabase
-      .from('bids')
-      .update({ is_winning: false })
-      .eq('listing_id', listingId);
+    setBidding(true);
 
-    const { error } = await supabase
-      .from('bids')
-      .insert({
+    const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/auction-ops`;
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        action: 'place_bid',
         listing_id: listingId,
-        bidder_id: user.id,
-        amount,
-        is_winning: true,
-      });
+        bid_amount: amount,
+      }),
+    });
 
-    if (error) {
-      setBidError(error.message);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      setBidError(err.error || `Bid failed (${response.status})`);
+      setBidding(false);
+      return;
+    }
+
+    const result: BidResult = await response.json();
+    if (!result.success) {
+      setBidError(result.message);
+      setBidding(false);
       return;
     }
 
     setBidSuccess(true);
     setBidAmount('');
+
     // Reload bids
     const { data: newBids } = await supabase
       .from('bids')
@@ -173,6 +231,45 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
       .eq('listing_id', listingId)
       .order('amount', { ascending: false });
     setBids((newBids as Bid[]) || []);
+    setBidding(false);
+  }
+
+  async function handleClaimDutch() {
+    if (!user) {
+      navigate({ name: 'auth' });
+      return;
+    }
+
+    setClaiming(true);
+    setClaimError(null);
+
+    const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/auction-ops`;
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        action: 'claim_dutch',
+        listing_id: listingId,
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      setClaimError(err.error || `Claim failed (${response.status})`);
+      setClaiming(false);
+      return;
+    }
+
+    const result = await response.json();
+    if (result.success) {
+      navigate({ name: 'orders' });
+    } else {
+      setClaimError(result.error || 'Failed to claim item');
+    }
+    setClaiming(false);
   }
 
   async function handleBuyNow() {
@@ -181,7 +278,6 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
       return;
     }
 
-    // Create order with escrow
     const { error } = await supabase
       .from('orders')
       .insert({
@@ -190,11 +286,10 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
         boutique_id: listing!.boutique_id,
         amount: Number(listing!.price),
         status: 'escrow_held',
-        shipping_address: 'Pending',
+        shipping_address: 'Pending - Cebu pickup/delivery',
       });
 
     if (!error) {
-      // Mark listing as sold
       await supabase
         .from('listings')
         .update({ status: 'sold' })
@@ -246,28 +341,48 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
         {/* Images */}
         <div>
           <div className="aspect-[4/5] rounded-2xl overflow-hidden bg-ink-100 mb-3">
-            {images.length > 0 ? (
-              <img src={images[selectedImage]} alt={listing.title} className="w-full h-full object-cover" />
+            {allImages.length > 0 ? (
+              <img src={allImages[selectedImage]?.url || allImages[0].url} alt={listing.title} className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-ink-300">
                 <Gavel className="w-16 h-16" />
               </div>
             )}
           </div>
-          {images.length > 1 && (
+
+          {/* Angle labels on thumbnails */}
+          {allImages.length > 1 && (
             <div className="flex gap-2 overflow-x-auto no-scrollbar">
-              {images.map((img, i) => (
+              {allImages.map((img, i) => (
                 <button
                   key={i}
                   onClick={() => setSelectedImage(i)}
                   className={cn(
-                    'w-20 h-24 rounded-lg overflow-hidden shrink-0 border-2 transition-colors',
-                    selectedImage === i ? 'border-ink-900' : 'border-transparent'
+                    'w-20 h-24 rounded-lg overflow-hidden shrink-0 border-2 transition-colors relative',
+                    selectedImage === i ? 'border-ink-900' : 'border-transparent',
                   )}
                 >
-                  <img src={img} alt="" className="w-full h-full object-cover" />
+                  <img src={img.url} alt={img.angle} className="w-full h-full object-cover" />
+                  <span className={cn(
+                    'absolute bottom-0 left-0 right-0 px-1 py-0.5 text-[9px] font-medium text-center',
+                    img.is_flaw ? 'bg-terracotta-500/80 text-white' : 'bg-ink-900/60 text-white',
+                  )}>
+                    {img.angle}
+                  </span>
                 </button>
               ))}
+            </div>
+          )}
+
+          {/* Flaw photos callout */}
+          {flawImages.length > 0 && (
+            <div className="mt-3 p-3 rounded-lg bg-terracotta-50 border border-terracotta-200">
+              <p className="text-xs font-medium text-terracotta-700 flex items-center gap-1.5 mb-1">
+                <AlertCircle className="w-3.5 h-3.5" /> Flaw / Condition Photos
+              </p>
+              <p className="text-xs text-terracotta-600">
+                {flawImages.length} photo{flawImages.length !== 1 ? 's' : ''} documenting condition for vintage grading. {flawImages.map((f) => f.caption).filter(Boolean).join('; ')}
+              </p>
             </div>
           )}
         </div>
@@ -292,10 +407,13 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gold-600 font-medium">★ {Number(boutique.rating_avg).toFixed(1)}</span>
                   <span className="text-xs text-ink-400">({boutique.rating_count} reviews)</span>
-                  {boutique.location && (
+                  {boutique.barangay && (
                     <span className="text-xs text-ink-400 flex items-center gap-0.5">
-                      <MapPin className="w-3 h-3" />{boutique.location}
+                      <MapPin className="w-3 h-3" />{boutique.barangay}, Cebu
                     </span>
+                  )}
+                  {boutique.pickup_available && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-sage-50 text-sage-700 font-medium">Pickup available</span>
                   )}
                 </div>
               </div>
@@ -312,8 +430,13 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
 
           <div className="flex flex-wrap items-center gap-2 mb-5">
             {isAuction && (
-              <span className="badge bg-terracotta-50 text-terracotta-700 border border-terracotta-200">
-                <Gavel className="w-3 h-3" /> Live Auction
+              <span className={cn(
+                'badge border',
+                isDutch
+                  ? 'bg-ink-900 text-cream border-ink-900'
+                  : 'bg-terracotta-50 text-terracotta-700 border-terracotta-200',
+              )}>
+                {isDutch ? <><TrendingDown className="w-3 h-3" /> Dutch Auction</> : <><Gavel className="w-3 h-3" /> Live Auction</>}
               </span>
             )}
             {listing.coa_verified && (
@@ -333,8 +456,9 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
 
           {/* Price / Bid section */}
           <div className="card p-5 mb-5">
-            {isAuction ? (
+            {isAuction && !isDutch ? (
               <>
+                {/* English Auction */}
                 <div className="flex items-end justify-between mb-4">
                   <div>
                     <p className="text-xs text-ink-500 uppercase tracking-wide mb-1">
@@ -345,14 +469,11 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                       {bids.length} bid{bids.length !== 1 ? 's' : ''}
                     </p>
                   </div>
-                  <div className={cn(
-                    'text-right',
-                    auctionActive ? '' : 'opacity-50'
-                  )}>
+                  <div className={cn('text-right', auctionActive ? '' : 'opacity-50')}>
                     <p className="text-xs text-ink-500 uppercase tracking-wide mb-1">Time Left</p>
                     <p className={cn(
                       'font-mono text-lg font-semibold',
-                      auctionActive && timeLeft.includes('h') && !timeLeft.startsWith('0') ? 'text-ink-900' : auctionActive ? 'text-terracotta-600' : 'text-ink-500'
+                      auctionActive && timeLeft.includes('h') && !timeLeft.startsWith('0') ? 'text-ink-900' : auctionActive ? 'text-terracotta-600' : 'text-ink-500',
                     )}>
                       {auctionActive ? timeLeft : 'Auction Ended'}
                     </p>
@@ -370,6 +491,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                       <label className="text-xs text-ink-500 mb-1 block">
                         Minimum bid: <span className="font-medium text-ink-900">{formatPriceDetailed(minNextBid)}</span>
                       </label>
+                      <p className="text-[10px] text-ink-400 mb-2">{incrementLabel}</p>
                       <div className="flex gap-2">
                         <div className="relative flex-1">
                           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400 text-sm">$</span>
@@ -382,7 +504,9 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                             className="input-field pl-7"
                           />
                         </div>
-                        <button type="submit" className="btn-terracotta px-6">Place Bid</button>
+                        <button type="submit" disabled={bidding} className="btn-terracotta px-6">
+                          {bidding ? 'Placing...' : 'Place Bid'}
+                        </button>
                       </div>
                     </div>
                     {bidError && (
@@ -406,6 +530,54 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                   </p>
                 )}
               </>
+            ) : isAuction && isDutch ? (
+              <>
+                {/* Dutch Auction */}
+                <div className="flex items-end justify-between mb-4">
+                  <div>
+                    <p className="text-xs text-ink-500 uppercase tracking-wide mb-1 flex items-center gap-1">
+                      <TrendingDown className="w-3 h-3" /> Current Price
+                    </p>
+                    <p className="font-serif text-3xl font-bold text-ink-900">{formatPrice(displayPrice)}</p>
+                    <p className="text-xs text-ink-500 mt-1">
+                      Started at {formatPrice(Number(listing.auction_start_price))}
+                      {listing.dutch_floor_price && ` · Floor: ${formatPrice(Number(listing.dutch_floor_price))}`}
+                    </p>
+                  </div>
+                  <div className={cn('text-right', auctionActive ? '' : 'opacity-50')}>
+                    <p className="text-xs text-ink-500 uppercase tracking-wide mb-1">Next Price Drop</p>
+                    <p className={cn('font-mono text-lg font-semibold', auctionActive ? 'text-terracotta-600' : 'text-ink-500')}>
+                      {auctionActive ? nextDropIn : 'Ended'}
+                    </p>
+                    {auctionActive && listing.decrement_rate && (
+                      <p className="text-[10px] text-ink-400 mt-0.5">
+                        Drops {listing.decrement_rate}% every {listing.decrement_interval_minutes}min
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {auctionActive && (
+                  <div className="space-y-3">
+                    <button
+                      onClick={handleClaimDutch}
+                      disabled={claiming}
+                      className="w-full btn-terracotta py-3 flex items-center justify-center gap-2"
+                    >
+                      <Zap className="w-4 h-4" />
+                      {claiming ? 'Claiming...' : `Claim Now — ${formatPrice(displayPrice)}`}
+                    </button>
+                    {claimError && (
+                      <p className="text-xs text-terracotta-600 flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" />{claimError}
+                      </p>
+                    )}
+                    <p className="text-[10px] text-ink-400 text-center">
+                      First to claim wins. Price drops automatically until claimed or floor is reached.
+                    </p>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="flex items-end justify-between">
                 <div>
@@ -423,7 +595,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
           {/* Trust badges */}
           <div className="grid grid-cols-3 gap-2 mb-5">
             <TrustItem icon={<Shield className="w-4 h-4" />} label="Escrow" />
-            <TrustItem icon={<Truck className="w-4 h-4" />} label="Tracked Shipping" />
+            <TrustItem icon={<Truck className="w-4 h-4" />} label="Cebu Delivery" />
             <TrustItem icon={<Leaf className="w-4 h-4" />} label="Carbon Offset" />
           </div>
 
@@ -441,7 +613,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
               <SpecRow label="Category" value={listing.category} />
               <SpecRow label="Material" value={listing.material} />
               <SpecRow label="Condition" value={listing.condition_grade} />
-              <SpecRow label="Listing Type" value={isAuction ? 'Auction' : 'Fixed Price'} />
+              <SpecRow label="Listing Type" value={isDutch ? 'Dutch Auction' : isAuction ? 'English Auction' : 'Fixed Price'} />
               <SpecRow label="SKU" value={listing.sku} />
             </div>
           </div>
@@ -477,7 +649,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
       </div>
 
       {/* Bid history */}
-      {isAuction && bids.length > 0 && (
+      {isAuction && !isDutch && bids.length > 0 && (
         <div className="mt-12">
           <h2 className="font-serif text-xl font-bold text-ink-900 mb-4">Bid History</h2>
           <div className="card divide-y divide-ink-100">
@@ -486,7 +658,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                 <div className="flex items-center gap-3">
                   <div className={cn(
                     'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold',
-                    bid.is_winning ? 'bg-terracotta-500 text-white' : 'bg-ink-100 text-ink-600'
+                    bid.is_winning ? 'bg-terracotta-500 text-white' : 'bg-ink-100 text-ink-600',
                   )}>
                     {i + 1}
                   </div>
