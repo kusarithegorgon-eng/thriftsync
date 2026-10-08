@@ -25,11 +25,6 @@ export function AuthPage() {
       if (signInError) setError(signInError);
       else navigate({ name: 'home' });
     } else {
-      if (password.length < 6) {
-        setError('Password must be at least 6 characters');
-        setLoading(false);
-        return;
-      }
       const { error: signUpError } = await signUp(email, password, displayName, role);
       if (signUpError) setError(signUpError);
       else navigate({ name: 'home' });
