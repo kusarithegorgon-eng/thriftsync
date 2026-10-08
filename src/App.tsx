@@ -15,6 +15,8 @@ import { OrdersPage } from '@/pages/OrdersPage';
 import { SellPage } from '@/pages/SellPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { VouchersPage } from '@/pages/VouchersPage';
+import { ThriftCrawlPage } from '@/pages/ThriftCrawlPage';
+import { LockerNetworkPage } from '@/pages/LockerNetworkPage';
 
 function RouteRenderer() {
   const { route } = useRouter();
@@ -44,6 +46,10 @@ function RouteRenderer() {
       return <DashboardPage />;
     case 'vouchers':
       return <VouchersPage />;
+    case 'thrift-crawl':
+      return <ThriftCrawlPage />;
+    case 'lockers':
+      return <LockerNetworkPage />;
     default:
       return <HomePage />;
   }

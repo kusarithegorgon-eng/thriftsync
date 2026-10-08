@@ -12,7 +12,9 @@ export type Route =
   | { name: 'checkout' }
   | { name: 'auth' }
   | { name: 'orders' }
-  | { name: 'vouchers' };
+  | { name: 'vouchers' }
+  | { name: 'thrift-crawl' }
+  | { name: 'lockers' };
 
 type RouterContextValue = {
   route: Route;
@@ -60,6 +62,10 @@ export function RouterProvider({ children }: { children: ReactNode }) {
       setRoute({ name: 'orders' });
     } else if (parts[0] === 'vouchers') {
       setRoute({ name: 'vouchers' });
+    } else if (parts[0] === 'thrift-crawl') {
+      setRoute({ name: 'thrift-crawl' });
+    } else if (parts[0] === 'lockers') {
+      setRoute({ name: 'lockers' });
     } else {
       setRoute({ name: 'home' });
     }

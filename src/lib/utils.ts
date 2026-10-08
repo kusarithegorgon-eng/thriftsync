@@ -259,3 +259,173 @@ export async function resizeImage(
     img.src = url;
   });
 }
+
+// ============================================================
+// CEBU DISTRICTS
+// ============================================================
+
+export const CEBU_DISTRICTS = [
+  { name: 'IT Park', city: 'Cebu City', lat: 10.3300, lng: 123.9050, radius: 1.5, metro: true },
+  { name: 'Lahug', city: 'Cebu City', lat: 10.3389, lng: 123.9033, radius: 2.0, metro: true },
+  { name: 'Guadalupe', city: 'Cebu City', lat: 10.3156, lng: 123.8833, radius: 2.5, metro: true },
+  { name: 'Mabolo', city: 'Cebu City', lat: 10.3183, lng: 123.9050, radius: 2.0, metro: true },
+  { name: 'Banilad', city: 'Cebu City', lat: 10.3392, lng: 123.9133, radius: 2.5, metro: true },
+  { name: 'Capitol Site', city: 'Cebu City', lat: 10.3167, lng: 123.8856, radius: 1.5, metro: true },
+  { name: 'Kamputhaw', city: 'Cebu City', lat: 10.3258, lng: 123.8983, radius: 1.5, metro: true },
+  { name: 'Pardo', city: 'Cebu City', lat: 10.2983, lng: 123.8683, radius: 3.0, metro: true },
+  { name: 'Downtown Colon', city: 'Cebu City', lat: 10.2933, lng: 123.9000, radius: 2.0, metro: true },
+  { name: 'Mandaue City Proper', city: 'Mandaue City', lat: 10.3300, lng: 123.9300, radius: 3.0, metro: true },
+  { name: 'Banilad Mandaue', city: 'Mandaue City', lat: 10.3400, lng: 123.9200, radius: 2.5, metro: true },
+  { name: 'Maguikay', city: 'Mandaue City', lat: 10.3250, lng: 123.9350, radius: 2.0, metro: true },
+  { name: 'Lapu-Lapu City Proper', city: 'Lapu-Lapu City', lat: 10.3050, lng: 124.0050, radius: 3.0, metro: true },
+  { name: 'Mactan', city: 'Lapu-Lapu City', lat: 10.2900, lng: 124.0150, radius: 4.0, metro: true },
+  { name: 'Maribago', city: 'Lapu-Lapu City', lat: 10.2850, lng: 124.0000, radius: 3.0, metro: true },
+  { name: 'Talisay City Proper', city: 'Talisay City', lat: 10.2500, lng: 123.8500, radius: 3.0, metro: true },
+  { name: 'Minglanilla', city: 'Minglanilla', lat: 10.2400, lng: 123.7900, radius: 4.0, metro: true },
+  { name: 'Naga City', city: 'Naga City', lat: 10.2100, lng: 123.7600, radius: 4.0, metro: true },
+  { name: 'Danao City', city: 'Danao City', lat: 10.5600, lng: 124.0000, radius: 5.0, metro: false },
+  { name: 'Carcar City', city: 'Carcar City', lat: 10.1200, lng: 123.6400, radius: 5.0, metro: false },
+  { name: 'Toledo City', city: 'Toledo City', lat: 10.3900, lng: 123.6400, radius: 5.0, metro: false },
+] as const;
+
+export function findDistrict(lat: number, lng: number): { name: string; city: string } | null {
+  let best: { name: string; city: string; dist: number } | null = null;
+  for (const d of CEBU_DISTRICTS) {
+    const dist = Math.sqrt(
+      Math.pow(d.lat - lat, 2) + Math.pow(d.lng - lng, 2),
+    ) * 111.0;
+    if (dist <= d.radius && (!best || dist < best.dist)) {
+      best = { name: d.name, city: d.city, dist };
+    }
+  }
+  return best ? { name: best.name, city: best.city } : null;
+}
+
+// ============================================================
+// ROUTE OPTIMIZATION (Nearest-Neighbor Greedy Algorithm)
+// ============================================================
+
+import type { ItineraryStop, TransportMode, RouteSegment, OptimizedRoute } from '@/lib/supabase';
+
+const TRANSPORT_SPEEDS: Record<TransportMode, number> = {
+  walking: 5,
+  driving: 25,
+  jeepney: 15,
+};
+
+const TRANSFER_OVERHEAD: Record<TransportMode, number> = {
+  walking: 0,
+  driving: 3,
+  jeepney: 8,
+};
+
+export function optimizeRoute(
+  stops: ItineraryStop[],
+  transportMode: TransportMode = 'driving',
+): OptimizedRoute {
+  if (stops.length === 0) {
+    return { ordered_stops: [], segments: [], total_distance_km: 0, total_time_minutes: 0 };
+  }
+
+  if (stops.length === 1) {
+    return { ordered_stops: stops, segments: [], total_distance_km: 0, total_time_minutes: 0 };
+  }
+
+  const speed = TRANSPORT_SPEEDS[transportMode];
+  const overhead = TRANSFER_OVERHEAD[transportMode];
+
+  // Nearest-neighbor greedy: start from first stop, always go to nearest unvisited
+  const unvisited = [...stops];
+  const ordered: ItineraryStop[] = [];
+  const segments: RouteSegment[] = [];
+  let totalDist = 0;
+  let totalTime = 0;
+
+  let current = unvisited.shift()!;
+  current.stop_order = 1;
+  ordered.push(current);
+
+  while (unvisited.length > 0) {
+    let nearestIdx = 0;
+    let nearestDist = Infinity;
+
+    for (let i = 0; i < unvisited.length; i++) {
+      const dist = haversineDistance(
+        current.lat, current.lng,
+        unvisited[i].lat, unvisited[i].lng,
+      );
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearestIdx = i;
+      }
+    }
+
+    const next = unvisited.splice(nearestIdx, 1)[0];
+    next.stop_order = ordered.length + 1;
+    ordered.push(next);
+
+    const segTime = (nearestDist / speed) * 60 + overhead;
+    segments.push({
+      from_lat: current.lat,
+      from_lng: current.lng,
+      to_lat: next.lat,
+      to_lng: next.lng,
+      distance_km: nearestDist,
+      time_minutes: segTime,
+    });
+
+    totalDist += nearestDist;
+    totalTime += segTime;
+    current = next;
+  }
+
+  return {
+    ordered_stops: ordered,
+    segments,
+    total_distance_km: totalDist,
+    total_time_minutes: Math.round(totalTime),
+  };
+}
+
+export function formatDuration(minutes: number): string {
+  if (minutes < 60) return `${Math.round(minutes)} min`;
+  const hours = Math.floor(minutes / 60);
+  const mins = Math.round(minutes % 60);
+  if (mins === 0) return `${hours} hr`;
+  return `${hours} hr ${mins} min`;
+}
+
+export function formatDistance(km: number): string {
+  if (km < 1) return `${Math.round(km * 1000)} m`;
+  return `${km.toFixed(1)} km`;
+}
+
+// ============================================================
+// LOCKER UTILITIES
+// ============================================================
+
+export function generatePin(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+export function getTodayHours(operatingHours: Record<string, string>): string {
+  const days = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  const today = days[new Date().getDay()];
+  return operatingHours[today] || 'Closed today';
+}
+
+export function isLockerOpenNow(operatingHours: Record<string, string>): boolean {
+  const hours = getTodayHours(operatingHours);
+  if (hours === 'closed' || hours === 'Closed today') return false;
+
+  const match = hours.match(/(\d+):(\d+)-(\d+):(\d+)/);
+  if (!match) return false;
+
+  const [, openH, openM, closeH, closeM] = match;
+  const now = new Date();
+  const currentMin = now.getHours() * 60 + now.getMinutes();
+  const openMin = parseInt(openH) * 60 + parseInt(openM);
+  const closeMin = parseInt(closeH) * 60 + parseInt(closeM);
+
+  return currentMin >= openMin && currentMin <= closeMin;
+}

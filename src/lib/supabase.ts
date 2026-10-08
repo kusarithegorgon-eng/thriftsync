@@ -250,3 +250,94 @@ export type BidResult = {
   message: string;
   new_current_bid: number | null;
 };
+
+// ============================================================
+// THRIFT CRAWL / LOCKER NETWORK TYPES
+// ============================================================
+
+export type CebuDistrict = {
+  id: string;
+  name: string;
+  city_municipality: string;
+  center_lat: number;
+  center_lng: number;
+  radius_km: number;
+  is_metro: boolean;
+};
+
+export type TransportMode = 'walking' | 'driving' | 'jeepney';
+
+export type ItineraryStop = {
+  boutique_id: string;
+  stop_order: number;
+  boutique_name: string;
+  lat: number;
+  lng: number;
+};
+
+export type Itinerary = {
+  id: string;
+  user_id: string;
+  name: string;
+  stops: ItineraryStop[];
+  transport_mode: TransportMode;
+  total_distance_km: number;
+  total_time_minutes: number;
+  status: 'planned' | 'active' | 'completed';
+  scheduled_date: string | null;
+  created_at: string;
+};
+
+export type LockerLocation = {
+  id: string;
+  partner_name: string;
+  address: string;
+  barangay: string | null;
+  city_municipality: string;
+  lat: number;
+  lng: number;
+  district_id: string | null;
+  operating_hours: Record<string, string>;
+  capacity_total: number;
+  capacity_available: number;
+  is_active: boolean;
+  contact_phone: string | null;
+  created_at: string;
+};
+
+export type LockerHandoff = {
+  id: string;
+  locker_location_id: string;
+  order_id: string | null;
+  user_id: string;
+  pin_code: string;
+  status: 'PENDING' | 'DROPPED_OFF' | 'PICKED_UP' | 'EXPIRED' | 'CANCELLED';
+  drop_off_window_start: string | null;
+  drop_off_window_end: string | null;
+  dropped_off_at: string | null;
+  picked_up_at: string | null;
+  created_at: string;
+};
+
+export type HandoffPinResult = {
+  handoff_id: string;
+  pin_code: string;
+  locker_name: string;
+  expires_at: string;
+};
+
+export type RouteSegment = {
+  from_lat: number;
+  from_lng: number;
+  to_lat: number;
+  to_lng: number;
+  distance_km: number;
+  time_minutes: number;
+};
+
+export type OptimizedRoute = {
+  ordered_stops: ItineraryStop[];
+  segments: RouteSegment[];
+  total_distance_km: number;
+  total_time_minutes: number;
+};

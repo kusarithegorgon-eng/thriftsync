@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { SlidersHorizontal, X, Gavel } from 'lucide-react';
 import { useRouter } from '@/lib/router';
-import { supabase, type ListingWithBoutique } from '@/lib/supabase';
+import { supabase, type ListingWithBoutique, type CebuDistrict } from '@/lib/supabase';
 import { ListingCard, ListingCardSkeleton } from '@/components/ListingCard';
-import { CATEGORIES, ERAS, CONDITIONS, cn } from '@/lib/utils';
+import { CATEGORIES, ERAS, CONDITIONS, CEBU_DISTRICTS, cn } from '@/lib/utils';
 
 export function BrowsePage() {
   const { route, navigate } = useRouter();
@@ -21,6 +21,7 @@ export function BrowsePage() {
   const [selectedConditions, setSelectedConditions] = useState<string[]>([]);
   const [auctionOnly, setAuctionOnly] = useState(false);
   const [dutchOnly, setDutchOnly] = useState(false);
+  const [selectedDistricts, setSelectedDistricts] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState(initialQ || '');
 
   useEffect(() => {
@@ -52,6 +53,19 @@ export function BrowsePage() {
       if (dutchOnly) {
         query = query.eq('auction_mode', 'DUTCH');
       }
+      if (selectedDistricts.length > 0) {
+        const { data: districtBoutiques } = await supabase
+          .from('boutiques')
+          .select('id')
+          .in('district_id', selectedDistricts);
+        if (districtBoutiques && districtBoutiques.length > 0) {
+          query = query.in('boutique_id', districtBoutiques.map((b) => b.id));
+        } else {
+          setListings([]);
+          setLoading(false);
+          return;
+        }
+      }
       if (searchQuery) {
         query = query.or(`title.ilike.%${searchQuery}%,description.ilike.%${searchQuery}%`);
       }
@@ -78,7 +92,7 @@ export function BrowsePage() {
       setLoading(false);
     }
     load();
-  }, [selectedCategories, selectedEras, selectedConditions, auctionOnly, dutchOnly, searchQuery, sortBy]);
+  }, [selectedCategories, selectedEras, selectedConditions, auctionOnly, dutchOnly, selectedDistricts, searchQuery, sortBy]);
 
   function toggleArrayValue(arr: string[], value: string): string[] {
     return arr.includes(value) ? arr.filter((v) => v !== value) : [...arr, value];
@@ -90,12 +104,13 @@ export function BrowsePage() {
     setSelectedConditions([]);
     setAuctionOnly(false);
     setDutchOnly(false);
+    setSelectedDistricts([]);
     setSearchQuery('');
     navigate({ name: 'browse' });
   }
 
   const activeFilterCount =
-    selectedCategories.length + selectedEras.length + selectedConditions.length + (auctionOnly ? 1 : 0) + (dutchOnly ? 1 : 0) + (searchQuery ? 1 : 0);
+    selectedCategories.length + selectedEras.length + selectedConditions.length + selectedDistricts.length + (auctionOnly ? 1 : 0) + (dutchOnly ? 1 : 0) + (searchQuery ? 1 : 0);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
@@ -144,11 +159,13 @@ export function BrowsePage() {
               selectedConditions={selectedConditions}
               auctionOnly={auctionOnly}
               dutchOnly={dutchOnly}
+              selectedDistricts={selectedDistricts}
               onToggleCategory={(v) => setSelectedCategories((prev) => toggleArrayValue(prev, v))}
               onToggleEra={(v) => setSelectedEras((prev) => toggleArrayValue(prev, v))}
               onToggleCondition={(v) => setSelectedConditions((prev) => toggleArrayValue(prev, v))}
               onToggleAuction={() => setAuctionOnly(!auctionOnly)}
               onToggleDutch={() => setDutchOnly(!dutchOnly)}
+              onToggleDistrict={(v) => setSelectedDistricts((prev) => toggleArrayValue(prev, v))}
               onClear={clearFilters}
             />
           </aside>
@@ -170,11 +187,13 @@ export function BrowsePage() {
                 selectedConditions={selectedConditions}
                 auctionOnly={auctionOnly}
                 dutchOnly={dutchOnly}
+                selectedDistricts={selectedDistricts}
                 onToggleCategory={(v) => setSelectedCategories((prev) => toggleArrayValue(prev, v))}
                 onToggleEra={(v) => setSelectedEras((prev) => toggleArrayValue(prev, v))}
                 onToggleCondition={(v) => setSelectedConditions((prev) => toggleArrayValue(prev, v))}
                 onToggleAuction={() => setAuctionOnly(!auctionOnly)}
                 onToggleDutch={() => setDutchOnly(!dutchOnly)}
+                onToggleDistrict={(v) => setSelectedDistricts((prev) => toggleArrayValue(prev, v))}
                 onClear={clearFilters}
               />
             </div>
@@ -197,6 +216,9 @@ export function BrowsePage() {
               ))}
               {auctionOnly && <FilterChip label="Auctions Only" onRemove={() => setAuctionOnly(false)} />}
               {dutchOnly && <FilterChip label="Dutch Auctions" onRemove={() => setDutchOnly(false)} />}
+              {selectedDistricts.map((d) => (
+                <FilterChip key={d} label={d} onRemove={() => setSelectedDistricts((prev) => prev.filter((v) => v !== d))} />
+              ))}
             </div>
             <select
               value={sortBy}
@@ -237,11 +259,13 @@ function FilterPanel(props: {
   selectedConditions: string[];
   auctionOnly: boolean;
   dutchOnly: boolean;
+  selectedDistricts: string[];
   onToggleCategory: (v: string) => void;
   onToggleEra: (v: string) => void;
   onToggleCondition: (v: string) => void;
   onToggleAuction: () => void;
   onToggleDutch: () => void;
+  onToggleDistrict: (v: string) => void;
   onClear: () => void;
 }) {
   return (
@@ -280,6 +304,17 @@ function FilterPanel(props: {
             label={cond}
             checked={props.selectedConditions.includes(cond)}
             onChange={() => props.onToggleCondition(cond)}
+          />
+        ))}
+      </FilterGroup>
+
+      <FilterGroup title="Cebu District">
+        {CEBU_DISTRICTS.filter((d) => d.metro).map((d) => (
+          <FilterCheckbox
+            key={d.name}
+            label={`${d.name} (${d.city})`}
+            checked={props.selectedDistricts.includes(d.name)}
+            onChange={() => props.onToggleDistrict(d.name)}
           />
         ))}
       </FilterGroup>

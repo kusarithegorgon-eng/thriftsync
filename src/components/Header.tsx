@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Gavel, Search, Heart, ShoppingBag, Menu, X, Store, User, LayoutDashboard, Package, Tag } from 'lucide-react';
+import { Gavel, Search, Heart, ShoppingBag, Menu, X, Store, User, LayoutDashboard, Package, Tag, MapPin, Lock } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { useCart } from '@/lib/cart';
@@ -74,6 +74,12 @@ export function Header() {
               <NavLink active={isActive('browse')} onClick={() => navigate({ name: 'browse' })}>
                 Browse
               </NavLink>
+              <NavLink active={isActive('thrift-crawl')} onClick={() => navigate({ name: 'thrift-crawl' })}>
+                Thrift Crawl
+              </NavLink>
+              <NavLink active={isActive('lockers')} onClick={() => navigate({ name: 'lockers' })}>
+                Lockers
+              </NavLink>
               <NavLink active={isActive('sell')} onClick={() => navigate({ name: 'sell' })}>
                 Sell
               </NavLink>
@@ -123,6 +129,12 @@ export function Header() {
                       </div>
                       <MenuItem icon={<LayoutDashboard className="w-4 h-4" />} onClick={() => navigate({ name: 'dashboard' })}>
                         Seller Dashboard
+                      </MenuItem>
+                      <MenuItem icon={<MapPin className="w-4 h-4" />} onClick={() => navigate({ name: 'thrift-crawl' })}>
+                        Thrift Crawl Planner
+                      </MenuItem>
+                      <MenuItem icon={<Lock className="w-4 h-4" />} onClick={() => navigate({ name: 'lockers' })}>
+                        Locker Network
                       </MenuItem>
                       <MenuItem icon={<Package className="w-4 h-4" />} onClick={() => navigate({ name: 'orders' })}>
                         My Orders
@@ -180,6 +192,12 @@ export function Header() {
               </form>
               <MobileNavLink onClick={() => navigate({ name: 'browse' })} icon={<Search className="w-4 h-4" />}>
                 Browse
+              </MobileNavLink>
+              <MobileNavLink onClick={() => navigate({ name: 'thrift-crawl' })} icon={<MapPin className="w-4 h-4" />}>
+                Thrift Crawl
+              </MobileNavLink>
+              <MobileNavLink onClick={() => navigate({ name: 'lockers' })} icon={<Lock className="w-4 h-4" />}>
+                Locker Network
               </MobileNavLink>
               <MobileNavLink onClick={() => navigate({ name: 'sell' })} icon={<Store className="w-4 h-4" />}>
                 Sell

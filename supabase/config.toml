@@ -3,3 +3,6 @@ verify_jwt = true
 
 [functions.auction-ops]
 verify_jwt = true
+
+[functions.thrift-crawl]
+verify_jwt = true
