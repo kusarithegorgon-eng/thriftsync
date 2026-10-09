@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { Upload, X, Camera, AlertTriangle, Check, Loader2, MapPin, RefreshCw } from 'lucide-react';
-import { supabase, type ImageMetadata, type ImageAngle } from '@/lib/supabase';
+import { supabase, getAccessToken, type ImageMetadata, type ImageAngle } from '@/lib/supabase';
 import { resizeImage, CEBU_BARANGAYS, isWithinCebu, findNearestBarangay, cn } from '@/lib/utils';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
@@ -106,12 +106,12 @@ export function SellPage() {
       const resized = await resizeImage(file, 1200, 1600, 0.85);
       const resizedFile = new File([resized], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' });
 
-      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-upload-url`;
-      const response = await fetch(apiUrl, {
+      const response = await fetch('/api/storage/signed-url', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
           'Content-Type': 'application/json',
+          'X-Application-Token': getAccessToken() || '',
         },
         body: JSON.stringify({
           fileName: resizedFile.name,

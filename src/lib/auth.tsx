@@ -77,20 +77,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (error) return { error: error.message };
 
-    if (data.user) {
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .update({ display_name: displayName, role })
-        .eq('id', data.user.id);
-
-      if (profileError) {
-        const { error: insertError } = await supabase
-          .from('profiles')
-          .insert({ id: data.user.id, display_name: displayName, role });
-        if (insertError) console.error('Profile creation error:', insertError);
-      }
-    }
-
     return { error: null };
   }
 

@@ -3,7 +3,7 @@ import { Shield, Check, ArrowLeft, Leaf, Truck, Tag, X, AlertCircle, MapPin, Pac
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { useCart } from '@/lib/cart';
-import { supabase, type Voucher, type Boutique, type CebuBarangay } from '@/lib/supabase';
+import { supabase, getAccessToken, type Voucher, type Boutique, type CebuBarangay } from '@/lib/supabase';
 import { formatPrice, CEBU_BARANGAYS, isWithinCebu, findNearestBarangay, haversineDistance, cn } from '@/lib/utils';
 import { CebuMap } from '@/components/CebuMap';
 
@@ -22,6 +22,7 @@ export function CheckoutPage() {
   const [lng, setLng] = useState<number | null>(null);
   const [deliveryMode, setDeliveryMode] = useState<DeliveryMode>('courier');
   const [processing, setProcessing] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [voucherCode, setVoucherCode] = useState('');
   const [voucherError, setVoucherError] = useState<string | null>(null);
   const [voucherLoading, setVoucherLoading] = useState(false);
@@ -139,38 +140,38 @@ export function CheckoutPage() {
       return;
     }
     setProcessing(true);
+    setCheckoutError(null);
 
     const fullAddress = deliveryMode === 'pickup'
       ? `PICKUP at ${selectedPickup?.name || 'boutique'}, ${selectedPickup?.barangay || ''}, ${selectedPickup?.location || 'Cebu'}`
       : `${name}, ${address}, ${barangay}, ${city}, Cebu, Philippines (${lat?.toFixed(4)}, ${lng?.toFixed(4)})`;
 
-    for (const item of items) {
-      await supabase.from('orders').insert({
-        buyer_id: user.id,
-        listing_id: item.listing.id,
-        boutique_id: item.listing.boutique_id,
-        amount: Number(item.listing.price),
-        status: 'escrow_held',
-        shipping_address: fullAddress,
+    try {
+      const response = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${getAccessToken() || ''}`,
+        },
+        body: JSON.stringify({
+          shipping_address: fullAddress,
+          items: items.map(({ listing }) => ({
+            listing_id: listing.id,
+            amount: Number(listing.price),
+          })),
+          voucher_code: appliedVoucher?.code || null,
+        }),
       });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `Checkout failed (${response.status}).`);
 
-      await supabase
-        .from('listings')
-        .update({ status: 'sold' })
-        .eq('id', item.listing.id);
+      clearCart();
+      setStep('complete');
+    } catch (error) {
+      setCheckoutError(error instanceof Error ? error.message : 'Unable to place your order.');
+    } finally {
+      setProcessing(false);
     }
-
-    if (appliedVoucher) {
-      await supabase.rpc('redeem_voucher', {
-        p_code: appliedVoucher.code,
-        p_user_id: user.id,
-        p_cart_total: total,
-      });
-    }
-
-    clearCart();
-    setProcessing(false);
-    setStep('complete');
   }
 
   if (items.length === 0 && step !== 'complete') {
@@ -220,6 +221,11 @@ export function CheckoutPage() {
 
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
+          {checkoutError && (
+            <div className="mb-4 p-3 bg-terracotta-50 border border-terracotta-200 rounded-lg text-sm text-terracotta-700" role="alert">
+              {checkoutError}
+            </div>
+          )}
           {step === 'shipping' && (
             <div className="card p-6 animate-slide-down">
               <div className="flex items-center gap-2 mb-4 p-2.5 bg-terracotta-50 rounded-lg border border-terracotta-200">
