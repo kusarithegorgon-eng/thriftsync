@@ -3,7 +3,7 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import {
   Lock, MapPin, Clock, Phone, Package, KeyRound, CheckCircle2,
-  AlertCircle, X, Search,
+  AlertCircle, X, Search, Store,
 } from 'lucide-react';
 import { supabase, type LockerLocation, type LockerHandoff, type HandoffPinResult } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
@@ -214,6 +214,37 @@ export function LockerNetworkPage() {
         <p className="text-sm text-ink-500">
           Pick up or drop off items at secure partner locations across Cebu. Generate a PIN-based handoff code for contactless exchange.
         </p>
+      </div>
+
+      {/* How it works */}
+      <div className="mb-6 grid sm:grid-cols-3 gap-4">
+        <div className="card p-4">
+          <div className="w-9 h-9 rounded-lg bg-sage-100 flex items-center justify-center mb-2">
+            <Store className="w-5 h-5 text-sage-700" />
+          </div>
+          <h3 className="text-sm font-medium text-ink-900 mb-1">1. Buy or Sell</h3>
+          <p className="text-xs text-ink-500 leading-relaxed">
+            When you buy an item and choose locker pickup at checkout, or when a seller needs to drop off a sold item, a partner locker is selected as the meeting point.
+          </p>
+        </div>
+        <div className="card p-4">
+          <div className="w-9 h-9 rounded-lg bg-terracotta-100 flex items-center justify-center mb-2">
+            <KeyRound className="w-5 h-5 text-terracotta-600" />
+          </div>
+          <h3 className="text-sm font-medium text-ink-900 mb-1">2. Generate a PIN</h3>
+          <p className="text-xs text-ink-500 leading-relaxed">
+            A unique 6-digit PIN is created for your handoff. The seller uses it to drop the item into a locker compartment. The buyer uses the same PIN to open the locker and collect the item.
+          </p>
+        </div>
+        <div className="card p-4">
+          <div className="w-9 h-9 rounded-lg bg-ink-100 flex items-center justify-center mb-2">
+            <CheckCircle2 className="w-5 h-5 text-ink-700" />
+          </div>
+          <h3 className="text-sm font-medium text-ink-900 mb-1">3. Contactless Handoff</h3>
+          <p className="text-xs text-ink-500 leading-relaxed">
+            No need to meet in person. The seller drops off the item at the partner location (e.g. a cafe), and the buyer picks it up within 48 hours using their PIN. Safe, simple, and convenient.
+          </p>
+        </div>
       </div>
 
       {/* Active handoffs */}

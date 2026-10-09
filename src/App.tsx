@@ -17,6 +17,7 @@ import { DashboardPage } from '@/pages/DashboardPage';
 import { VouchersPage } from '@/pages/VouchersPage';
 import { ThriftCrawlPage } from '@/pages/ThriftCrawlPage';
 import { LockerNetworkPage } from '@/pages/LockerNetworkPage';
+import { AdminPage } from '@/pages/AdminPage';
 
 function RouteRenderer() {
   const { route } = useRouter();
@@ -50,6 +51,8 @@ function RouteRenderer() {
       return <ThriftCrawlPage />;
     case 'lockers':
       return <LockerNetworkPage />;
+    case 'admin':
+      return <AdminPage />;
     default:
       return <HomePage />;
   }

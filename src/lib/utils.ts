@@ -1,16 +1,16 @@
 export function formatPrice(amount: number): string {
-  return new Intl.NumberFormat('en-US', {
+  return new Intl.NumberFormat('en-PH', {
     style: 'currency',
-    currency: 'USD',
+    currency: 'PHP',
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(amount);
 }
 
 export function formatPriceDetailed(amount: number): string {
-  return new Intl.NumberFormat('en-US', {
+  return new Intl.NumberFormat('en-PH', {
     style: 'currency',
-    currency: 'USD',
+    currency: 'PHP',
   }).format(amount);
 }
 
@@ -144,11 +144,11 @@ export function findNearestBarangay(lat: number, lng: number) {
 // ============================================================
 
 export const BID_INCREMENT_TIERS = [
-  { max: 50, increment: 1, label: '$0 – $50: $1 minimum' },
-  { max: 200, increment: 5, label: '$50 – $200: $5 minimum' },
-  { max: 500, increment: 10, label: '$200 – $500: $10 minimum' },
-  { max: 1000, increment: 25, label: '$500 – $1,000: $25 minimum' },
-  { max: Infinity, increment: 50, label: '$1,000+: $50 minimum' },
+  { max: 50, increment: 1, label: '₱0 – ₱50: ₱1 minimum' },
+  { max: 200, increment: 5, label: '₱50 – ₱200: ₱5 minimum' },
+  { max: 500, increment: 10, label: '₱200 – ₱500: ₱10 minimum' },
+  { max: 1000, increment: 25, label: '₱500 – ₱1,000: ₱25 minimum' },
+  { max: Infinity, increment: 50, label: '₱1,000+: ₱50 minimum' },
 ] as const;
 
 export function getMinIncrement(currentBid: number, override?: number | null): number {
@@ -167,7 +167,7 @@ export function getIncrementTierLabel(currentBid: number): string {
   for (const tier of BID_INCREMENT_TIERS) {
     if (currentBid < tier.max) return tier.label;
   }
-  return '$1,000+: $50 minimum';
+  return '₱1,000+: ₱50 minimum';
 }
 
 // Dutch auction: compute current price based on time elapsed

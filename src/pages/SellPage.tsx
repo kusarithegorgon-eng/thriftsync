@@ -269,7 +269,8 @@ export function SellPage() {
         decrement_interval_minutes: isDutch ? parseInt(decrementInterval) : 60,
         current_dutch_price: isDutch ? parseFloat(dutchStartPrice) : null,
         dutch_floor_price: isDutch ? parseFloat(dutchFloorPrice) : null,
-        status: 'active',
+        status: 'draft',
+        moderation_status: 'pending_review',
         sku: 'TS-' + Date.now().toString(36).slice(-6).toUpperCase(),
         coa_verified: false,
         views: 0,
@@ -291,8 +292,8 @@ export function SellPage() {
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-sage-100 mb-4">
           <Check className="w-8 h-8 text-sage-600" />
         </div>
-        <h1 className="font-serif text-2xl font-bold text-ink-900 mb-2">Listing Published!</h1>
-        <p className="text-sm text-ink-500 mb-6">Your item is now live on ThriftSync and visible to buyers in Cebu.</p>
+        <h1 className="font-serif text-2xl font-bold text-ink-900 mb-2">Listing Submitted for Review!</h1>
+        <p className="text-sm text-ink-500 mb-6">Your item has been submitted for admin review. Once approved, it will be live on ThriftSync and visible to buyers in Cebu. This usually takes less than 24 hours.</p>
         <div className="flex gap-3 justify-center">
           <button onClick={() => navigate({ name: 'dashboard' })} className="btn-primary">Go to Dashboard</button>
           <button
@@ -508,7 +509,7 @@ export function SellPage() {
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs font-medium text-ink-700 mb-1.5 block">Price (USD) *</label>
+                <label className="text-xs font-medium text-ink-700 mb-1.5 block">Price (₱) *</label>
                 <input type="number" step="0.01" value={listingPrice} onChange={(e) => setListingPrice(e.target.value)} className="input-field" placeholder="0.00" required />
               </div>
               <div>
@@ -539,8 +540,8 @@ export function SellPage() {
                 {auctionMode === 'ENGLISH' && (
                   <div>
                     <label className="text-xs font-medium text-ink-700 mb-1.5 block">Min Bid Increment (optional — leave blank for tier-based)</label>
-                    <input type="number" step="0.01" value={incrementStep} onChange={(e) => setIncrementStep(e.target.value)} className="input-field" placeholder="Auto: $1/$5/$10/$25/$50 by tier" />
-                    <p className="text-[10px] text-ink-400 mt-1">If blank, minimum increments apply: $1 (under $50), $5 ($50–$200), $10 ($200–$500), $25 ($500–$1K), $50 ($1K+)</p>
+                    <input type="number" step="0.01" value={incrementStep} onChange={(e) => setIncrementStep(e.target.value)} className="input-field" placeholder="Auto: ₱1/₱5/₱10/₱25/₱50 by tier" />
+                    <p className="text-[10px] text-ink-400 mt-1">If blank, minimum increments apply: ₱1 (under ₱50), ₱5 (₱50–₱200), ₱10 (₱200–₱500), ₱25 (₱500–₱1K), ₱50 (₱1K+)</p>
                   </div>
                 )}
 

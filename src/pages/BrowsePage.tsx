@@ -36,7 +36,8 @@ export function BrowsePage() {
       let query = supabase
         .from('listings')
         .select('*, boutiques(id, name, slug, logo_url)')
-        .eq('status', 'active');
+        .eq('status', 'active')
+        .eq('moderation_status', 'approved');
 
       if (selectedCategories.length > 0) {
         query = query.in('category', selectedCategories);

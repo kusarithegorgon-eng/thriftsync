@@ -242,11 +242,11 @@ export function ThriftCrawlPage() {
       <div className="grid lg:grid-cols-[1fr_400px] gap-6">
         {/* Map column */}
         <div className="space-y-4">
-          <div className="rounded-xl overflow-hidden border border-ink-200" style={{ height: '500px' }}>
+          <div className="rounded-xl overflow-hidden border border-ink-200 relative" style={{ height: '500px', zIndex: 0 }}>
             <MapContainer
               center={[CEBU_CENTER.lat, CEBU_CENTER.lng]}
               zoom={12}
-              style={{ height: '100%', width: '100%' }}
+              style={{ height: '100%', width: '100%', zIndex: 0 }}
               scrollWheelZoom={false}
             >
               <TileLayer
@@ -436,7 +436,7 @@ export function ThriftCrawlPage() {
 
       {/* Boutique search modal */}
       {showSearch && (
-        <div className="fixed inset-0 z-50 bg-ink-950/50 flex items-center justify-center p-4" onClick={() => setShowSearch(false)}>
+        <div className="fixed inset-0 z-[1000] bg-ink-950/50 flex items-center justify-center p-4" onClick={() => setShowSearch(false)}>
           <div className="bg-cream rounded-xl shadow-xl max-w-md w-full max-h-[80vh] flex flex-col animate-slide-down" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between p-4 border-b border-ink-100">
               <h2 className="font-serif text-lg font-bold">Add a Stop</h2>

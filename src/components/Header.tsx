@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Gavel, Search, Heart, ShoppingBag, Menu, X, Store, User, LayoutDashboard, Package, Tag, MapPin, Lock } from 'lucide-react';
+import { Gavel, Search, Heart, ShoppingBag, Menu, X, Store, User, LayoutDashboard, Package, Tag, MapPin, Lock, ShieldCheck } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { useCart } from '@/lib/cart';
@@ -86,6 +86,11 @@ export function Header() {
               <NavLink active={isActive('dashboard')} onClick={() => navigate({ name: 'dashboard' })}>
                 Dashboard
               </NavLink>
+              {profile?.role === 'admin' && (
+                <NavLink active={isActive('admin')} onClick={() => navigate({ name: 'admin' })}>
+                  Admin
+                </NavLink>
+              )}
             </nav>
 
             {/* Action buttons */}
@@ -145,6 +150,11 @@ export function Header() {
                       <MenuItem icon={<Heart className="w-4 h-4" />} onClick={() => navigate({ name: 'wishlist' })}>
                         Wishlist
                       </MenuItem>
+                      {profile?.role === 'admin' && (
+                        <MenuItem icon={<ShieldCheck className="w-4 h-4" />} onClick={() => navigate({ name: 'admin' })}>
+                          Admin Moderation
+                        </MenuItem>
+                      )}
                       <div className="border-t border-ink-100 mt-1 pt-1">
                         <MenuItem icon={<X className="w-4 h-4" />} onClick={() => signOut()}>
                           Sign Out
@@ -208,6 +218,11 @@ export function Header() {
               <MobileNavLink onClick={() => navigate({ name: 'vouchers' })} icon={<Tag className="w-4 h-4" />}>
                 Promo Codes
               </MobileNavLink>
+              {profile?.role === 'admin' && (
+                <MobileNavLink onClick={() => navigate({ name: 'admin' })} icon={<ShieldCheck className="w-4 h-4" />}>
+                  Admin Moderation
+                </MobileNavLink>
+              )}
               {!user && (
                 <button
                   onClick={() => navigate({ name: 'auth' })}

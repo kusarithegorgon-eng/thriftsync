@@ -19,6 +19,7 @@ export function HomePage() {
           .from('listings')
           .select('*, boutiques(id, name, slug, logo_url)')
           .eq('status', 'active')
+          .eq('moderation_status', 'approved')
           .eq('listing_type', 'fixed')
           .order('views', { ascending: false })
           .limit(8),
@@ -26,6 +27,7 @@ export function HomePage() {
           .from('listings')
           .select('*, boutiques(id, name, slug, logo_url)')
           .eq('status', 'active')
+          .eq('moderation_status', 'approved')
           .eq('listing_type', 'auction')
           .order('views', { ascending: false })
           .limit(4),
@@ -101,7 +103,7 @@ export function HomePage() {
                 <p className="text-xs text-cream/60">Boutiques</p>
               </div>
               <div>
-                <p className="font-serif text-2xl font-bold text-cream">$1.2M</p>
+                <p className="font-serif text-2xl font-bold text-cream">₱4.2M</p>
                 <p className="text-xs text-cream/60">GMV This Year</p>
               </div>
             </div>

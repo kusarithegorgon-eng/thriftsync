@@ -81,6 +81,10 @@ export type Listing = {
   current_dutch_price: number | null;
   dutch_floor_price: number | null;
   status: 'active' | 'sold' | 'draft';
+  moderation_status: 'pending_review' | 'approved' | 'rejected';
+  moderation_note: string | null;
+  moderated_by: string | null;
+  moderated_at: string | null;
   sku: string | null;
   coa_verified: boolean;
   views: number;
