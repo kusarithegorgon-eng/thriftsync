@@ -16,7 +16,4 @@ export default defineConfig({
       '/uploads': 'http://127.0.0.1:4000',
     },
   },
-  optimizeDeps: {
-    exclude: ['lucide-react'],
-  },
 });
