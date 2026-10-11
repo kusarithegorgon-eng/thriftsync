@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
-  ShieldCheck, CheckCircle2, XCircle, Clock, Search, Package,
+  ShieldCheck, CheckCircle2, XCircle, Clock, Search, Package, CheckSquare,
   ChevronRight, AlertCircle, Store, RefreshCw,
 } from 'lucide-react';
 import { supabase, type ListingWithBoutique } from '@/lib/supabase';
@@ -17,12 +17,15 @@ export function AdminPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<{ id: string; text: string; success: boolean } | null>(null);
-  const [rejectModal, setRejectModal] = useState<{ listingId: string; listingTitle: string } | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkMessage, setBulkMessage] = useState<{ text: string; success: boolean } | null>(null);
+  const [rejectModal, setRejectModal] = useState<{ listingId: string | null; listingTitle: string } | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [selectedListing, setSelectedListing] = useState<ListingWithBoutique | null>(null);
 
   const loadListings = useCallback(async () => {
     setLoading(true);
+    setSelectedIds([]);
     let query = supabase
       .from('listings')
       .select('*, boutiques(id, name, slug, logo_url)');
@@ -98,6 +101,38 @@ export function AdminPage() {
     }
   }
 
+  async function moderateSelected(action: 'approve' | 'reject', reason?: string) {
+    const pendingIds = listings
+      .filter((listing) => listing.moderation_status === 'pending_review' && selectedIds.includes(listing.id))
+      .map((listing) => listing.id);
+    if (!pendingIds.length) return;
+
+    setActionLoading('bulk');
+    setBulkMessage(null);
+    try {
+      const { data, error } = await supabase.rpc('bulk_moderate_listings', {
+        p_listing_ids: pendingIds,
+        p_action: action,
+        p_reason: reason || null,
+      });
+      if (error) throw error;
+      const result = data?.[0];
+      if (!result) throw new Error('Bulk moderation did not return a result.');
+      setBulkMessage({ text: result.message, success: result.processed_count > 0 });
+      setSelectedIds([]);
+      setRejectModal(null);
+      setRejectReason('');
+      await loadListings();
+    } catch (err) {
+      setBulkMessage({
+        text: err instanceof Error ? err.message : 'Bulk moderation failed.',
+        success: false,
+      });
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
   if (authLoading) {
     return <div className="max-w-7xl mx-auto px-4 py-16 text-center text-ink-500">Loading...</div>;
   }
@@ -114,6 +149,15 @@ export function AdminPage() {
   }
 
   const pendingCount = listings.filter((l) => l.moderation_status === 'pending_review').length;
+  const pendingListings = listings.filter((listing) => listing.moderation_status === 'pending_review');
+  const selectedPendingCount = pendingListings.filter((listing) => selectedIds.includes(listing.id)).length;
+  const allPendingSelected = pendingListings.length > 0 && selectedPendingCount === pendingListings.length;
+
+  function toggleListingSelection(listingId: string) {
+    setSelectedIds((current) => current.includes(listingId)
+      ? current.filter((id) => id !== listingId)
+      : [...current, listingId]);
+  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
@@ -189,6 +233,18 @@ export function AdminPage() {
         </div>
       </div>
 
+      {bulkMessage && (
+        <div className={cn(
+          'mb-4 p-3 rounded-lg text-sm flex items-center gap-2',
+          bulkMessage.success ? 'bg-sage-50 text-sage-700' : 'bg-terracotta-50 text-terracotta-700',
+        )}>
+          {bulkMessage.success
+            ? <CheckCircle2 className="w-4 h-4 shrink-0" />
+            : <AlertCircle className="w-4 h-4 shrink-0" />}
+          {bulkMessage.text}
+        </div>
+      )}
+
       {/* Listings */}
       {loading ? (
         <div className="text-center py-16 text-sm text-ink-500">Loading listings...</div>
@@ -199,9 +255,57 @@ export function AdminPage() {
         </div>
       ) : (
         <div className="space-y-3">
+          {filter === 'pending_review' && pendingListings.length > 0 && (
+            <div className="card p-3 flex flex-col sm:flex-row sm:items-center gap-3">
+              <label className="flex items-center gap-2 text-sm text-ink-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={allPendingSelected}
+                  onChange={(event) => setSelectedIds(
+                    event.target.checked ? pendingListings.map((listing) => listing.id) : [],
+                  )}
+                  disabled={actionLoading !== null}
+                  className="w-4 h-4 rounded border-ink-300 text-terracotta-500 focus:ring-terracotta-400"
+                />
+                Select all {pendingListings.length} pending listings on this page
+              </label>
+              <span className="text-xs text-ink-500 sm:ml-auto">
+                {selectedPendingCount} selected
+              </span>
+              <button
+                onClick={() => moderateSelected('approve')}
+                disabled={selectedPendingCount === 0 || actionLoading !== null}
+                className="btn-primary text-xs px-3 py-2 flex items-center justify-center gap-1 disabled:opacity-50"
+              >
+                <CheckSquare className="w-3.5 h-3.5" />
+                {actionLoading === 'bulk' ? 'Processing...' : `Approve Selected (${selectedPendingCount})`}
+              </button>
+              <button
+                onClick={() => {
+                  setRejectModal({ listingId: null, listingTitle: `${selectedPendingCount} selected listings` });
+                  setRejectReason('');
+                }}
+                disabled={selectedPendingCount === 0 || actionLoading !== null}
+                className="btn-secondary text-xs px-3 py-2 flex items-center justify-center gap-1 disabled:opacity-50"
+              >
+                <XCircle className="w-3.5 h-3.5" />
+                Reject Selected
+              </button>
+            </div>
+          )}
           {listings.map((listing) => (
             <div key={listing.id} className="card p-4">
               <div className="flex items-start gap-4">
+                {filter === 'pending_review' && listing.moderation_status === 'pending_review' && (
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${listing.title}`}
+                    checked={selectedIds.includes(listing.id)}
+                    onChange={() => toggleListingSelection(listing.id)}
+                    disabled={actionLoading !== null}
+                    className="mt-1 w-4 h-4 shrink-0 rounded border-ink-300 text-terracotta-500 focus:ring-terracotta-400"
+                  />
+                )}
                 {/* Image */}
                 <div className="w-20 h-20 rounded-lg overflow-hidden bg-ink-100 shrink-0">
                   {listing.images && listing.images.length > 0 ? (
@@ -333,7 +437,9 @@ export function AdminPage() {
                 <XCircle className="w-5 h-5 text-terracotta-600" />
               </div>
               <div>
-                <h2 className="font-serif text-lg font-bold text-ink-900">Reject Listing</h2>
+                <h2 className="font-serif text-lg font-bold text-ink-900">
+                  {rejectModal.listingId ? 'Reject Listing' : 'Reject Selected Listings'}
+                </h2>
                 <p className="text-xs text-ink-500">{rejectModal.listingTitle}</p>
               </div>
             </div>
@@ -349,11 +455,15 @@ export function AdminPage() {
             />
             <div className="flex gap-2">
               <button
-                onClick={() => reject(rejectModal.listingId, rejectReason || 'Listing rejected by admin')}
-                disabled={actionLoading === rejectModal.listingId}
+                onClick={() => rejectModal.listingId
+                  ? reject(rejectModal.listingId, rejectReason.trim() || 'Listing rejected by admin')
+                  : moderateSelected('reject', rejectReason.trim())}
+                disabled={rejectModal.listingId
+                  ? actionLoading === rejectModal.listingId
+                  : actionLoading !== null || !rejectReason.trim()}
                 className="btn-primary flex-1"
               >
-                {actionLoading === rejectModal.listingId ? 'Processing...' : 'Confirm Rejection'}
+                {actionLoading !== null ? 'Processing...' : rejectModal.listingId ? 'Confirm Rejection' : 'Reject Selected'}
               </button>
               <button onClick={() => setRejectModal(null)} className="btn-secondary">Cancel</button>
             </div>

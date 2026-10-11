@@ -1,35 +1,35 @@
-# thriftsync
+# ThriftSync
 
 [![Open in Bolt](https://bolt.new/static/open-in-bolt.svg)](https://bolt.new/~/sb1-bahr8krs)
 
-## Run ThriftSync with MariaDB
+## Run ThriftSync with Supabase
 
-The frontend uses a local API connected to MariaDB. It does not connect to
-Supabase. Start MariaDB from XAMPP before starting the app.
+The frontend connects directly to Supabase for authentication, database
+queries, storage, and Edge Functions. No local MariaDB server or API is needed.
 
-1. In phpMyAdmin, create a database named `thrifysync`, select it, and import
-   [`database/thrifysync.sql`](./database/thrifysync.sql). Import into an empty
-   database; the dump creates the marketplace tables and Cebu reference data.
-2. Copy `.env.example` to `.env`. Set `MYSQL_PASSWORD` if your MariaDB `root`
-   account has a password and replace `AUTH_TOKEN_SECRET` with a private,
-   random value of at least 32 characters. Do not commit `.env`.
-3. Install Node.js 20 or later, then run `npm install` once to install the app
-   and API dependencies.
-4. Run `npm run dev:full` from the project folder. This starts the MariaDB API
-   and Vite development server. Open the local URL printed by Vite, usually
-   `http://localhost:5173`.
+1. Apply the SQL files in [`supabase/migrations`](./supabase/migrations) in
+   timestamp order. For an existing project whose earlier migrations are
+   already applied, apply the new
+   [`checkout migration`](./supabase/migrations/20261011000000_add_atomic_checkout.sql)
+   and [`auction migration`](./supabase/migrations/20261011010000_complete_auction_modes.sql)
+   and [`bulk moderation migration`](./supabase/migrations/20261011020000_add_bulk_listing_moderation.sql)
+   in the Supabase SQL Editor.
+2. Copy `.env.example` to `.env` and set `VITE_SUPABASE_URL` and
+   `VITE_SUPABASE_ANON_KEY` from your Supabase project's API settings. The
+   publishable/anon key is intended for frontend use; never put a service-role
+   key in the Vite environment.
+3. Deploy the `auction-ops` Edge Function in `supabase/functions/auction-ops`
+   and set its Supabase secrets as required by that function. Redeploy it after
+   updating the function source.
+4. Install Node.js 20 or later, run `npm install`, then run `npm run dev`.
+   Open the local URL printed by Vite, usually `http://localhost:5173`.
 
-The API creates an `app_users` table the first time it starts. Create the first
-account through the app's Sign Up page. To grant that account administrator
-access, run the following in phpMyAdmin, replacing the email:
+Create accounts through the app's Sign Up page. To grant an account
+administrator access, update its `profiles.role` to `admin` in the Supabase
+Dashboard after signing up. Sellers can choose English auctions, where buyers
+place ascending bids, or Dutch auctions, where the price descends until a
+buyer claims the item.
 
-```sql
-UPDATE profiles
-JOIN app_users ON app_users.id = profiles.id
-SET profiles.role = 'admin'
-WHERE app_users.email = 'your-admin@example.com';
-```
-
-The API uses the database specified by `MYSQL_DATABASE` and refuses to start if
-the ThriftSync schema has not been imported. The MariaDB server must remain
-running while the app is in use.
+The Privacy Notice and Terms of Use contain marked legal-business and contact
+placeholders. Replace them with verified details and have the notices reviewed
+for your business before making the marketplace publicly available.

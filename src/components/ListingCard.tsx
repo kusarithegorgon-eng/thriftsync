@@ -51,14 +51,14 @@ export function ListingCard({ listing }: { listing: ListingWithBoutique }) {
         listing.dutch_floor_price!,
         listing.decrement_rate!,
         listing.decrement_interval_minutes,
-        listing.created_at,
+        listing.auction_start_at || listing.created_at,
       );
       setDutchPrice(computed);
     };
     update();
     const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
-  }, [isDutch, listing.auction_start_price, listing.dutch_floor_price, listing.decrement_rate, listing.decrement_interval_minutes, listing.created_at]);
+  }, [isDutch, listing.auction_start_price, listing.dutch_floor_price, listing.decrement_rate, listing.decrement_interval_minutes, listing.auction_start_at, listing.created_at]);
 
   const displayPrice = isDutch
     ? (dutchPrice ?? Number(listing.current_dutch_price ?? listing.auction_start_price))
@@ -88,13 +88,13 @@ export function ListingCard({ listing }: { listing: ListingWithBoutique }) {
           {isAuction && !isDutch && (
             <span className="badge bg-terracotta-500 text-white">
               <Gavel className="w-3 h-3" />
-              Auction
+              Ascending Auction
             </span>
           )}
           {isDutch && (
             <span className="badge bg-ink-900 text-cream">
               <TrendingDown className="w-3 h-3" />
-              Dutch Auction
+              Descending Auction
             </span>
           )}
           {listing.coa_verified && (

@@ -20,6 +20,7 @@ export function BrowsePage() {
   const [selectedEras, setSelectedEras] = useState<string[]>(initialEra ? [initialEra] : []);
   const [selectedConditions, setSelectedConditions] = useState<string[]>([]);
   const [auctionOnly, setAuctionOnly] = useState(false);
+  const [englishOnly, setEnglishOnly] = useState(false);
   const [dutchOnly, setDutchOnly] = useState(false);
   const [selectedDistricts, setSelectedDistricts] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState(initialQ || '');
@@ -50,6 +51,12 @@ export function BrowsePage() {
       }
       if (auctionOnly) {
         query = query.eq('listing_type', 'auction');
+      }
+      if (englishOnly || dutchOnly) {
+        query = query.eq('listing_type', 'auction');
+      }
+      if (englishOnly) {
+        query = query.eq('auction_mode', 'ENGLISH');
       }
       if (dutchOnly) {
         query = query.eq('auction_mode', 'DUTCH');
@@ -93,7 +100,7 @@ export function BrowsePage() {
       setLoading(false);
     }
     load();
-  }, [selectedCategories, selectedEras, selectedConditions, auctionOnly, dutchOnly, selectedDistricts, searchQuery, sortBy]);
+  }, [selectedCategories, selectedEras, selectedConditions, auctionOnly, englishOnly, dutchOnly, selectedDistricts, searchQuery, sortBy]);
 
   function toggleArrayValue(arr: string[], value: string): string[] {
     return arr.includes(value) ? arr.filter((v) => v !== value) : [...arr, value];
@@ -104,6 +111,7 @@ export function BrowsePage() {
     setSelectedEras([]);
     setSelectedConditions([]);
     setAuctionOnly(false);
+    setEnglishOnly(false);
     setDutchOnly(false);
     setSelectedDistricts([]);
     setSearchQuery('');
@@ -111,7 +119,7 @@ export function BrowsePage() {
   }
 
   const activeFilterCount =
-    selectedCategories.length + selectedEras.length + selectedConditions.length + selectedDistricts.length + (auctionOnly ? 1 : 0) + (dutchOnly ? 1 : 0) + (searchQuery ? 1 : 0);
+    selectedCategories.length + selectedEras.length + selectedConditions.length + selectedDistricts.length + (auctionOnly ? 1 : 0) + (englishOnly ? 1 : 0) + (dutchOnly ? 1 : 0) + (searchQuery ? 1 : 0);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
@@ -159,13 +167,21 @@ export function BrowsePage() {
               selectedEras={selectedEras}
               selectedConditions={selectedConditions}
               auctionOnly={auctionOnly}
+              englishOnly={englishOnly}
               dutchOnly={dutchOnly}
               selectedDistricts={selectedDistricts}
               onToggleCategory={(v) => setSelectedCategories((prev) => toggleArrayValue(prev, v))}
               onToggleEra={(v) => setSelectedEras((prev) => toggleArrayValue(prev, v))}
               onToggleCondition={(v) => setSelectedConditions((prev) => toggleArrayValue(prev, v))}
               onToggleAuction={() => setAuctionOnly(!auctionOnly)}
-              onToggleDutch={() => setDutchOnly(!dutchOnly)}
+              onToggleEnglish={() => {
+                setEnglishOnly(!englishOnly);
+                if (!englishOnly) setDutchOnly(false);
+              }}
+              onToggleDutch={() => {
+                setDutchOnly(!dutchOnly);
+                if (!dutchOnly) setEnglishOnly(false);
+              }}
               onToggleDistrict={(v) => setSelectedDistricts((prev) => toggleArrayValue(prev, v))}
               onClear={clearFilters}
             />
@@ -187,13 +203,21 @@ export function BrowsePage() {
                 selectedEras={selectedEras}
                 selectedConditions={selectedConditions}
                 auctionOnly={auctionOnly}
+                englishOnly={englishOnly}
                 dutchOnly={dutchOnly}
                 selectedDistricts={selectedDistricts}
                 onToggleCategory={(v) => setSelectedCategories((prev) => toggleArrayValue(prev, v))}
                 onToggleEra={(v) => setSelectedEras((prev) => toggleArrayValue(prev, v))}
                 onToggleCondition={(v) => setSelectedConditions((prev) => toggleArrayValue(prev, v))}
                 onToggleAuction={() => setAuctionOnly(!auctionOnly)}
-                onToggleDutch={() => setDutchOnly(!dutchOnly)}
+                onToggleEnglish={() => {
+                  setEnglishOnly(!englishOnly);
+                  if (!englishOnly) setDutchOnly(false);
+                }}
+                onToggleDutch={() => {
+                  setDutchOnly(!dutchOnly);
+                  if (!dutchOnly) setEnglishOnly(false);
+                }}
                 onToggleDistrict={(v) => setSelectedDistricts((prev) => toggleArrayValue(prev, v))}
                 onClear={clearFilters}
               />
@@ -216,6 +240,7 @@ export function BrowsePage() {
                 <FilterChip key={c} label={c} onRemove={() => setSelectedConditions((prev) => prev.filter((v) => v !== c))} />
               ))}
               {auctionOnly && <FilterChip label="Auctions Only" onRemove={() => setAuctionOnly(false)} />}
+              {englishOnly && <FilterChip label="English Auctions (Ascending)" onRemove={() => setEnglishOnly(false)} />}
               {dutchOnly && <FilterChip label="Dutch Auctions" onRemove={() => setDutchOnly(false)} />}
               {selectedDistricts.map((d) => (
                 <FilterChip key={d} label={d} onRemove={() => setSelectedDistricts((prev) => prev.filter((v) => v !== d))} />
@@ -259,12 +284,14 @@ function FilterPanel(props: {
   selectedEras: string[];
   selectedConditions: string[];
   auctionOnly: boolean;
+  englishOnly: boolean;
   dutchOnly: boolean;
   selectedDistricts: string[];
   onToggleCategory: (v: string) => void;
   onToggleEra: (v: string) => void;
   onToggleCondition: (v: string) => void;
   onToggleAuction: () => void;
+  onToggleEnglish: () => void;
   onToggleDutch: () => void;
   onToggleDistrict: (v: string) => void;
   onClear: () => void;
@@ -325,6 +352,11 @@ function FilterPanel(props: {
           label="Auction items only"
           checked={props.auctionOnly}
           onChange={props.onToggleAuction}
+        />
+        <FilterCheckbox
+          label="English auctions (ascending bids)"
+          checked={props.englishOnly}
+          onChange={props.onToggleEnglish}
         />
         <FilterCheckbox
           label="Dutch auctions (descending price)"

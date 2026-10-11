@@ -15,7 +15,8 @@ export type Route =
   | { name: 'vouchers' }
   | { name: 'thrift-crawl' }
   | { name: 'lockers' }
-  | { name: 'admin' };
+  | { name: 'admin' }
+  | { name: 'legal'; document: 'privacy' | 'terms' | 'cookies' };
 
 type RouterContextValue = {
   route: Route;
@@ -69,6 +70,8 @@ export function RouterProvider({ children }: { children: ReactNode }) {
       setRoute({ name: 'lockers' });
     } else if (parts[0] === 'admin') {
       setRoute({ name: 'admin' });
+    } else if (parts[0] === 'privacy' || parts[0] === 'terms' || parts[0] === 'cookies') {
+      setRoute({ name: 'legal', document: parts[0] });
     } else {
       setRoute({ name: 'home' });
     }
@@ -87,6 +90,8 @@ export function RouterProvider({ children }: { children: ReactNode }) {
       hash = `#/listing/${newRoute.id}`;
     } else if (newRoute.name === 'boutique') {
       hash = `#/boutique/${newRoute.slug}`;
+    } else if (newRoute.name === 'legal') {
+      hash = `#/${newRoute.document}`;
     } else if (newRoute.name !== 'home') {
       hash = `#/${newRoute.name}`;
     }

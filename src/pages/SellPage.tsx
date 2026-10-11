@@ -1,6 +1,6 @@
-import { useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { Upload, X, Camera, AlertTriangle, Check, Loader2, MapPin, RefreshCw } from 'lucide-react';
-import { supabase, getAccessToken, type ImageMetadata, type ImageAngle } from '@/lib/supabase';
+import { supabase, type Boutique, type ImageMetadata, type ImageAngle } from '@/lib/supabase';
 import { resizeImage, CEBU_BARANGAYS, isWithinCebu, findNearestBarangay, cn } from '@/lib/utils';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
@@ -26,6 +26,8 @@ export function SellPage() {
   const { navigate } = useRouter();
   const { user, profile } = useAuth();
   const [step, setStep] = useState<'intro' | 'boutique' | 'listing'>('intro');
+  const [store, setStore] = useState<Pick<Boutique, 'id' | 'name'> | null>(null);
+  const [storeLoading, setStoreLoading] = useState(true);
   const [boutiqueName, setBoutiqueName] = useState('');
   const [boutiqueTagline, setBoutiqueTagline] = useState('');
   const [boutiqueBio, setBoutiqueBio] = useState('');
@@ -61,6 +63,38 @@ export function SellPage() {
   const [success, setSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [pendingAngle, setPendingAngle] = useState<ImageAngle>('front');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadStore() {
+      if (!user) {
+        setStoreLoading(false);
+        return;
+      }
+      const { data, error: storeError } = await supabase
+        .from('boutiques')
+        .select('id, name')
+        .eq('seller_id', user.id)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (cancelled) return;
+      if (storeError) {
+        setError(storeError.message);
+      } else if (data) {
+        setStore(data as Pick<Boutique, 'id' | 'name'>);
+        setStep('listing');
+      }
+      setStoreLoading(false);
+    }
+
+    loadStore();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   if (!user) {
     return (
@@ -103,40 +137,18 @@ export function SellPage() {
     }
 
     try {
+      if (!user) throw new Error('Sign in to upload images.');
       const resized = await resizeImage(file, 1200, 1600, 0.85);
       const resizedFile = new File([resized], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' });
 
-      const response = await fetch('/api/storage/signed-url', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-          'X-Application-Token': getAccessToken() || '',
-        },
-        body: JSON.stringify({
-          fileName: resizedFile.name,
-          contentType: 'image/jpeg',
-          folder: 'listings',
-        }),
-      });
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.error || `Upload failed (${response.status})`);
-      }
-
-      const { signedUrl, publicUrl } = await response.json();
-
-      const uploadResponse = await fetch(signedUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'image/jpeg' },
-        body: resizedFile,
-      });
-
-      if (!uploadResponse.ok) {
-        throw new Error(`Upload to storage failed (${uploadResponse.status})`);
-      }
-
+      const filePath = `${user.id}/${crypto.randomUUID()}.jpg`;
+      const { error: storageError } = await supabase.storage
+        .from('listing-images')
+        .upload(filePath, resizedFile, { contentType: 'image/jpeg', upsert: false });
+      if (storageError) throw storageError;
+      const { data: { publicUrl } } = supabase.storage
+        .from('listing-images')
+        .getPublicUrl(filePath);
       const isFlaw = angle === 'flaw';
       setImages((prev) => {
         const filtered = prev.filter((img) => img.angle !== angle);
@@ -206,6 +218,7 @@ export function SellPage() {
     }
 
     if (data) {
+      setStore({ id: data.id, name: data.name });
       setStep('listing');
     }
     setSubmitting(false);
@@ -223,14 +236,8 @@ export function SellPage() {
       return;
     }
 
-    const { data: boutique } = await supabase
-      .from('boutiques')
-      .select('id')
-      .eq('seller_id', user.id)
-      .maybeSingle();
-
-    if (!boutique) {
-      setError('No boutique found. Please create one first.');
+    if (!store) {
+      setError('Create your storefront before adding products.');
       setSubmitting(false);
       return;
     }
@@ -245,14 +252,47 @@ export function SellPage() {
 
     const isAuction = listingType === 'auction';
     const isDutch = isAuction && auctionMode === 'DUTCH';
+    const startingPrice = Number(listingPrice);
+    const durationDays = Number(auctionDays);
+
+    if (!Number.isFinite(startingPrice) || startingPrice <= 0) {
+      setError('Enter a starting price greater than zero.');
+      setSubmitting(false);
+      return;
+    }
+    if (isAuction && (!Number.isInteger(durationDays) || durationDays < 1 || durationDays > 30)) {
+      setError('Auction duration must be between 1 and 30 days.');
+      setSubmitting(false);
+      return;
+    }
+    if (isDutch) {
+      const startPrice = Number(dutchStartPrice);
+      const floorPrice = Number(dutchFloorPrice);
+      const rate = Number(decrementRate);
+      const interval = Number(decrementInterval);
+      if (!Number.isFinite(startPrice) || !Number.isFinite(floorPrice) || floorPrice <= 0 || startPrice <= floorPrice) {
+        setError('Dutch auction start price must be greater than a positive floor price.');
+        setSubmitting(false);
+        return;
+      }
+      if (!Number.isFinite(rate) || rate <= 0 || rate > 100 || !Number.isInteger(interval) || interval < 5) {
+        setError('Set a price-drop rate greater than 0 and at most 100%, and an interval of at least 5 minutes.');
+        setSubmitting(false);
+        return;
+      }
+    } else if (isAuction && incrementStep && (!Number.isFinite(Number(incrementStep)) || Number(incrementStep) <= 0)) {
+      setError('The minimum bid increment must be greater than zero.');
+      setSubmitting(false);
+      return;
+    }
 
     const { error: listingError } = await supabase
       .from('listings')
       .insert({
-        boutique_id: boutique.id,
+        boutique_id: store.id,
         title: listingTitle,
         description: listingDesc,
-        price: parseFloat(listingPrice),
+        price: startingPrice,
         era: listingEra || null,
         category: listingCategory || null,
         condition_grade: listingCondition || null,
@@ -260,8 +300,9 @@ export function SellPage() {
         images: imageUrls,
         image_metadata: imageMeta,
         listing_type: listingType,
-        auction_mode: auctionMode,
-        auction_end_at: isAuction ? new Date(Date.now() + parseInt(auctionDays) * 24 * 60 * 60 * 1000).toISOString() : null,
+        auction_mode: isAuction ? auctionMode : 'ENGLISH',
+        auction_duration_days: isAuction ? durationDays : null,
+        auction_end_at: isAuction ? new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString() : null,
         auction_start_price: isDutch ? parseFloat(dutchStartPrice) : null,
         reserve_price: isAuction && !isDutch ? parseFloat(listingPrice) : null,
         increment_step: isAuction && !isDutch && incrementStep ? parseFloat(incrementStep) : null,
@@ -292,7 +333,7 @@ export function SellPage() {
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-sage-100 mb-4">
           <Check className="w-8 h-8 text-sage-600" />
         </div>
-        <h1 className="font-serif text-2xl font-bold text-ink-900 mb-2">Listing Submitted for Review!</h1>
+        <h1 className="font-serif text-2xl font-bold text-ink-900 mb-2">Product Submitted for Review!</h1>
         <p className="text-sm text-ink-500 mb-6">Your item has been submitted for admin review. Once approved, it will be live on ThriftSync and visible to buyers in Cebu. This usually takes less than 24 hours.</p>
         <div className="flex gap-3 justify-center">
           <button onClick={() => navigate({ name: 'dashboard' })} className="btn-primary">Go to Dashboard</button>
@@ -306,11 +347,21 @@ export function SellPage() {
               setListingCategory('');
               setListingCondition('');
               setListingMaterial('');
+              setListingType('fixed');
+              setAuctionMode('ENGLISH');
+              setAuctionDays('7');
+              setIncrementStep('');
+              setDutchStartPrice('');
+              setDutchFloorPrice('');
+              setDecrementRate('5');
+              setDecrementInterval('60');
               setImages([]);
+              setError(null);
+              setUploadError(null);
             }}
             className="btn-secondary"
           >
-            List Another Item
+            Add Another Product
           </button>
         </div>
       </div>
@@ -319,7 +370,15 @@ export function SellPage() {
 
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
-      {step === 'intro' && (
+      {storeLoading && (
+        <div className="card p-6 text-sm text-ink-500">Loading your storefront...</div>
+      )}
+      {!storeLoading && error && !store && step === 'intro' && (
+        <div className="card p-6">
+          <p className="text-sm text-terracotta-600">{error}</p>
+        </div>
+      )}
+      {!storeLoading && step === 'intro' && (
         <>
           <div className="text-center mb-8">
             <h1 className="font-serif text-3xl font-bold text-ink-900 mb-2">Start Selling on ThriftSync</h1>
@@ -340,7 +399,7 @@ export function SellPage() {
         </>
       )}
 
-      {step === 'boutique' && (
+      {!storeLoading && step === 'boutique' && (
         <div className="card p-6 animate-slide-down">
           <h2 className="font-serif text-xl font-bold text-ink-900 mb-1">Create Your Boutique</h2>
           <p className="text-sm text-ink-500 mb-5">Set up your storefront. Your boutique must be located in Cebu.</p>
@@ -413,10 +472,15 @@ export function SellPage() {
         </div>
       )}
 
-      {step === 'listing' && (
+      {!storeLoading && step === 'listing' && (
         <div className="card p-6 animate-slide-down">
-          <h2 className="font-serif text-xl font-bold text-ink-900 mb-1">List an Item</h2>
-          <p className="text-sm text-ink-500 mb-5">Upload multi-angle photos with flaw documentation for vintage condition grading.</p>
+          <div className="mb-5">
+            <h2 className="font-serif text-xl font-bold text-ink-900 mb-1">Add a Product</h2>
+            <p className="text-sm text-ink-500">
+              {store ? `Adding a product to ${store.name}.` : 'Upload a product for your new storefront.'}
+              {' '}Each product gets its own listing in your store.
+            </p>
+          </div>
 
           <form onSubmit={handleCreateListing} className="space-y-4">
             <div>
@@ -503,7 +567,7 @@ export function SellPage() {
                 </p>
               )}
               <p className="text-[10px] text-ink-400">
-                Images are auto-resized to max 1200x1600px and uploaded via signed URLs. Required: Front, Back, Flaw/Damage. Flaw photos document condition for vintage grading.
+                Images are auto-resized to max 1200x1600px and uploaded to your store. Required: Front, Back, Flaw/Damage. Flaw photos document condition for vintage grading.
               </p>
             </div>
 
@@ -578,7 +642,7 @@ export function SellPage() {
                 <label className="text-xs font-medium text-ink-700 mb-1.5 block">Era</label>
                 <select value={listingEra} onChange={(e) => setListingEra(e.target.value)} className="input-field">
                   <option value="">Select era...</option>
-                  {['1890s', '1920s', '1930s', '1950s', '1960s', '1970s', '1980s', '1990s'].map((era) => <option key={era} value={era}>{era}</option>)}
+                  {['1890s', '1920s', '1930s', '1950s', '1960s', '1970s', '1980s', '1990s', '2000s', '2010s', '2020s'].map((era) => <option key={era} value={era}>{era}</option>)}
                 </select>
               </div>
               <div>

@@ -3,7 +3,7 @@ import { Shield, Check, ArrowLeft, Leaf, Truck, Tag, X, AlertCircle, MapPin, Pac
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { useCart } from '@/lib/cart';
-import { supabase, getAccessToken, type Voucher, type Boutique, type CebuBarangay } from '@/lib/supabase';
+import { supabase, type Voucher, type Boutique, type CebuBarangay } from '@/lib/supabase';
 import { formatPrice, CEBU_BARANGAYS, isWithinCebu, findNearestBarangay, haversineDistance, cn } from '@/lib/utils';
 import { CebuMap } from '@/components/CebuMap';
 
@@ -147,24 +147,15 @@ export function CheckoutPage() {
       : `${name}, ${address}, ${barangay}, ${city}, Cebu, Philippines (${lat?.toFixed(4)}, ${lng?.toFixed(4)})`;
 
     try {
-      const response = await fetch('/api/checkout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${getAccessToken() || ''}`,
-        },
-        body: JSON.stringify({
-          shipping_address: fullAddress,
-          items: items.map(({ listing }) => ({
-            listing_id: listing.id,
-            amount: Number(listing.price),
-          })),
-          voucher_code: appliedVoucher?.code || null,
-        }),
+      const { error } = await supabase.rpc('checkout_fixed_items', {
+        p_shipping_address: fullAddress,
+        p_items: items.map(({ listing }) => ({
+          listing_id: listing.id,
+          amount: Number(listing.price),
+        })),
+        p_voucher_code: appliedVoucher?.code || null,
       });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || `Checkout failed (${response.status}).`);
-
+      if (error) throw new Error(error.message);
       clearCart();
       setStep('complete');
     } catch (error) {

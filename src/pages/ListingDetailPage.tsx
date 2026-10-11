@@ -3,7 +3,7 @@ import { Gavel, Heart, BadgeCheck, Eye, Clock, MapPin, MessageCircle, ArrowLeft,
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { useCart } from '@/lib/cart';
-import { supabase, getAccessToken, type Listing, type Boutique, type Bid, type Review, type ListingWithBoutique, type ImageMetadata, type BidResult } from '@/lib/supabase';
+import { supabase, type Listing, type Boutique, type Bid, type Review, type ListingWithBoutique, type ImageMetadata, type BidResult } from '@/lib/supabase';
 import { formatPrice, formatPriceDetailed, formatCountdown, isAuctionActive, formatTimeAgo, cn, getMinNextBid, getIncrementTierLabel, computeDutchPrice, getNextDropTime } from '@/lib/utils';
 import { ListingCard } from '@/components/ListingCard';
 
@@ -110,11 +110,14 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
         listing.dutch_floor_price!,
         listing.decrement_rate!,
         listing.decrement_interval_minutes,
-        listing.created_at,
+        listing.auction_start_at || listing.created_at,
       );
       setDutchPrice(computed);
 
-      const nextDrop = getNextDropTime(listing.decrement_interval_minutes, listing.created_at);
+      const nextDrop = getNextDropTime(
+        listing.decrement_interval_minutes,
+        listing.auction_start_at || listing.created_at,
+      );
       if (nextDrop) {
         const diff = nextDrop.getTime() - Date.now();
         if (diff > 0) {
@@ -193,34 +196,19 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
 
     setBidding(true);
 
-    const response = await fetch('/api/auction-ops', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-        'Content-Type': 'application/json',
-        'X-Application-Token': getAccessToken() || '',
-      },
-      body: JSON.stringify({
-        action: 'place_bid',
-        listing_id: listingId,
-        bid_amount: amount,
-      }),
+    const { data: result, error } = await supabase.functions.invoke<BidResult>('auction-ops', {
+      body: { action: 'place_bid', listing_id: listingId, bid_amount: amount },
     });
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      setBidError(err.error || `Bid failed (${response.status})`);
+    if (error) {
+      setBidError(error.message);
       setBidding(false);
       return;
     }
-
-    const result: BidResult = await response.json();
-    if (!result.success) {
-      setBidError(result.message);
+    if (!result?.success) {
+      setBidError(result?.message || 'Bid failed.');
       setBidding(false);
       return;
     }
-
     setBidSuccess(true);
     setBidAmount('');
 
@@ -243,31 +231,19 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
     setClaiming(true);
     setClaimError(null);
 
-    const response = await fetch('/api/auction-ops', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-        'Content-Type': 'application/json',
-        'X-Application-Token': getAccessToken() || '',
-      },
-      body: JSON.stringify({
-        action: 'claim_dutch',
-        listing_id: listingId,
-      }),
+    const { data, error } = await supabase.rpc('claim_dutch_auction', {
+      p_listing_id: listingId,
     });
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      setClaimError(err.error || `Claim failed (${response.status})`);
+    if (error) {
+      setClaimError(error.message);
       setClaiming(false);
       return;
     }
-
-    const result = await response.json();
-    if (result.success) {
+    const result = data?.[0];
+    if (result?.success) {
       navigate({ name: 'orders' });
     } else {
-      setClaimError(result.error || 'Failed to claim item');
+      setClaimError(result?.error || 'Failed to claim item');
     }
     setClaiming(false);
   }
@@ -278,22 +254,15 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
       return;
     }
 
-    const response = await fetch('/api/checkout', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${getAccessToken() || ''}`,
-      },
-      body: JSON.stringify({
-        items: [{ listing_id: listing!.id, amount: Number(listing!.price) }],
-        shipping_address: 'Pending - Cebu pickup/delivery',
-      }),
+    const { error } = await supabase.rpc('checkout_fixed_items', {
+      p_items: [{ listing_id: listing!.id, amount: Number(listing!.price) }],
+      p_shipping_address: 'Pending - Cebu pickup/delivery',
+      p_voucher_code: null,
     });
-    const result = await response.json().catch(() => ({}));
-    if (response.ok) {
+    if (!error) {
       navigate({ name: 'orders' });
     } else {
-      setClaimError(result.error || `Purchase failed (${response.status}).`);
+      setClaimError(error.message);
     }
   }
 

@@ -18,6 +18,8 @@ import { VouchersPage } from '@/pages/VouchersPage';
 import { ThriftCrawlPage } from '@/pages/ThriftCrawlPage';
 import { LockerNetworkPage } from '@/pages/LockerNetworkPage';
 import { AdminPage } from '@/pages/AdminPage';
+import { LegalPage } from '@/pages/LegalPage';
+import { CookieNotice } from '@/components/CookieNotice';
 
 function RouteRenderer() {
   const { route } = useRouter();
@@ -53,6 +55,8 @@ function RouteRenderer() {
       return <LockerNetworkPage />;
     case 'admin':
       return <AdminPage />;
+    case 'legal':
+      return <LegalPage document={route.document} />;
     default:
       return <HomePage />;
   }
@@ -69,6 +73,7 @@ function App() {
               <RouteRenderer />
             </main>
             <Footer />
+            <CookieNotice />
           </div>
         </CartProvider>
       </RouterProvider>

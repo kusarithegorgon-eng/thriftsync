@@ -94,66 +94,6 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // --- CLAIM DUTCH AUCTION ITEM ---
-    if (action === "claim_dutch") {
-      const { listing_id } = body;
-      if (!listing_id) {
-        return new Response(
-          JSON.stringify({ error: "listing_id is required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
-      }
-
-      // Atomically claim: set status to sold if still active
-      const { data: listing, error: listingError } = await adminClient
-        .from("listings")
-        .select("*")
-        .eq("id", listing_id)
-        .eq("status", "active")
-        .eq("auction_mode", "DUTCH")
-        .maybeSingle();
-
-      if (listingError || !listing) {
-        return new Response(
-          JSON.stringify({ error: "Listing not available for claim" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
-      }
-
-      const claimPrice = Number(listing.current_dutch_price ?? listing.auction_start_price);
-
-      // Create order
-      const { error: orderError } = await adminClient.from("orders").insert({
-        buyer_id: userData.user.id,
-        listing_id: listing_id,
-        boutique_id: listing.boutique_id,
-        amount: claimPrice,
-        status: "escrow_held",
-        shipping_address: "Pending - Cebu pickup/delivery",
-      });
-
-      if (orderError) {
-        return new Response(
-          JSON.stringify({ error: "Failed to create order: " + orderError.message }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
-      }
-
-      // Mark listing as sold
-      await adminClient.from("listings")
-        .update({ status: "sold" })
-        .eq("id", listing_id);
-
-      return new Response(
-        JSON.stringify({
-          success: true,
-          claim_price: claimPrice,
-          message: "Dutch auction item claimed successfully",
-        }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
     // --- VALIDATE CEBU GEOFENCE ---
     if (action === "validate_geofence") {
       const { lat, lng } = body;

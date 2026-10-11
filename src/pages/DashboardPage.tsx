@@ -24,6 +24,8 @@ export function DashboardPage() {
         .from('boutiques')
         .select('*')
         .eq('seller_id', user.id)
+        .order('created_at', { ascending: true })
+        .limit(1)
         .maybeSingle();
       setBoutique(boutiqueData as Boutique);
 
@@ -201,7 +203,7 @@ export function DashboardPage() {
             <h3 className="text-sm font-medium text-ink-900 mb-3">Quick Actions</h3>
             <div className="space-y-2">
               <button onClick={() => navigate({ name: 'sell' })} className="w-full flex items-center gap-2 p-2.5 rounded-lg hover:bg-ink-50 transition-colors text-sm text-ink-700">
-                <Plus className="w-4 h-4" /> Add new listing
+                <Plus className="w-4 h-4" /> Add new product
               </button>
               <button onClick={() => navigate({ name: 'boutique', slug: boutique.slug })} className="w-full flex items-center gap-2 p-2.5 rounded-lg hover:bg-ink-50 transition-colors text-sm text-ink-700">
                 <Eye className="w-4 h-4" /> View your boutique

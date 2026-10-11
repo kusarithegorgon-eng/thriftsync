@@ -65,9 +65,10 @@ export function Footer() {
         <div className="border-t border-ink-800 mt-10 pt-6 flex flex-col sm:flex-row justify-between items-center gap-4">
           <p className="text-xs text-ink-500">© 2026 ThriftSync. All rights reserved.</p>
           <div className="flex gap-6 text-xs text-ink-500">
-            <a href="#" className="hover:text-cream transition-colors">Privacy</a>
-            <a href="#" className="hover:text-cream transition-colors">Terms</a>
-            <a href="#" className="hover:text-cream transition-colors">Cookies</a>
+            <button onClick={() => navigate({ name: 'legal', document: 'privacy' })} className="hover:text-cream transition-colors">Privacy</button>
+            <button onClick={() => navigate({ name: 'legal', document: 'terms' })} className="hover:text-cream transition-colors">Terms</button>
+            <button onClick={() => navigate({ name: 'legal', document: 'cookies' })} className="hover:text-cream transition-colors">Cookies</button>
+            <button onClick={() => window.dispatchEvent(new Event('thriftsync:open-cookie-settings'))} className="hover:text-cream transition-colors">Cookie settings</button>
           </div>
         </div>
       </div>
