@@ -147,6 +147,28 @@ export function CheckoutPage() {
       : `${name}, ${address}, ${barangay}, ${city}, Cebu, Philippines (${lat?.toFixed(4)}, ${lng?.toFixed(4)})`;
 
     try {
+      const { data: availableListings, error: availabilityError } = await supabase
+        .from('listings')
+        .select('id, status, moderation_status')
+        .in('id', items.map(({ listing }) => listing.id));
+      if (availabilityError) {
+        throw new Error(`Could not verify product availability: ${availabilityError.message}`);
+      }
+
+      const availableListingIds = new Set(
+        (availableListings || [])
+          .filter((listing) => listing.status === 'active' && listing.moderation_status === 'approved')
+          .map((listing) => listing.id),
+      );
+      const unavailableTitles = items
+        .filter(({ listing }) => !availableListingIds.has(listing.id))
+        .map(({ listing }) => listing.title);
+      if (unavailableTitles.length > 0) {
+        throw new Error(
+          `${unavailableTitles.join(', ')} ${unavailableTitles.length === 1 ? 'is' : 'are'} no longer available. Return to your cart and remove ${unavailableTitles.length === 1 ? 'it' : 'them'} before placing the order.`,
+        );
+      }
+
       const { error } = await supabase.rpc('checkout_fixed_items', {
         p_shipping_address: fullAddress,
         p_items: items.map(({ listing }) => ({
@@ -155,7 +177,12 @@ export function CheckoutPage() {
         })),
         p_voucher_code: appliedVoucher?.code || null,
       });
-      if (error) throw new Error(error.message);
+      if (error) {
+        if (error.message.includes('One or more cart items are no longer available.')) {
+          throw new Error('A product became unavailable while you were checking out. Return to your cart, remove it, and try again.');
+        }
+        throw new Error(error.message);
+      }
       clearCart();
       setStep('complete');
     } catch (error) {

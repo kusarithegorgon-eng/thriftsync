@@ -24,6 +24,13 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
 4. Install Node.js 20 or later, run `npm install`, then run `npm run dev`.
    Open the local URL printed by Vite, usually `http://localhost:5173`.
 
+To load sample marketplace data, run [`supabase/seed_demo_data.sql`](./supabase/seed_demo_data.sql)
+in the Supabase SQL Editor after applying the migrations. The script is safe to
+rerun; it creates clearly labeled demo profiles, boutiques, eight product
+listings, and three completed demo orders. The five unsold listings appear in
+the marketplace; demo orders remain subject to the app's existing order access
+policies.
+
 Create accounts through the app's Sign Up page. To grant an account
 administrator access, update its `profiles.role` to `admin` in the Supabase
 Dashboard after signing up. Sellers can choose English auctions, where buyers
