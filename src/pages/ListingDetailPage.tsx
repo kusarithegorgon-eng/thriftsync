@@ -196,14 +196,17 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
 
     setBidding(true);
 
-    const { data: result, error } = await supabase.functions.invoke<BidResult>('auction-ops', {
-      body: { action: 'place_bid', listing_id: listingId, bid_amount: amount },
+    const { data: bidRows, error } = await supabase.rpc('place_bid', {
+      p_listing_id: listingId,
+      p_bidder_id: user.id,
+      p_bid_amount: amount,
     });
     if (error) {
       setBidError(error.message);
       setBidding(false);
       return;
     }
+    const result = bidRows?.[0] as BidResult | undefined;
     if (!result?.success) {
       setBidError(result?.message || 'Bid failed.');
       setBidding(false);

@@ -19,6 +19,7 @@ import { ThriftCrawlPage } from '@/pages/ThriftCrawlPage';
 import { LockerNetworkPage } from '@/pages/LockerNetworkPage';
 import { AdminPage } from '@/pages/AdminPage';
 import { LegalPage } from '@/pages/LegalPage';
+import { ContactPage } from '@/pages/ContactPage';
 import { CookieNotice } from '@/components/CookieNotice';
 
 function RouteRenderer() {
@@ -43,6 +44,8 @@ function RouteRenderer() {
       return <WishlistPage />;
     case 'orders':
       return <OrdersPage />;
+    case 'contact':
+      return <ContactPage />;
     case 'sell':
       return <SellPage />;
     case 'dashboard':

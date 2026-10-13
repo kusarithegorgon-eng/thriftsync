@@ -11,17 +11,28 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    timestamp order. For an existing project whose earlier migrations are
    already applied, apply the new
    [`checkout migration`](./supabase/migrations/20261011000000_add_atomic_checkout.sql)
-   and [`auction migration`](./supabase/migrations/20261011010000_complete_auction_modes.sql)
-   and [`bulk moderation migration`](./supabase/migrations/20261011020000_add_bulk_listing_moderation.sql)
+   [`auction migration`](./supabase/migrations/20261011010000_complete_auction_modes.sql),
+   [`bulk moderation migration`](./supabase/migrations/20261011020000_add_bulk_listing_moderation.sql),
+   [`bid error fix`](./supabase/migrations/20261013000000_fix_place_bid_message_ambiguity.sql),
+   [`order fulfillment migration`](./supabase/migrations/20261013010000_add_order_fulfillment_flow.sql),
+   and any later migrations in timestamp order
    in the Supabase SQL Editor.
 2. Copy `.env.example` to `.env` and set `VITE_SUPABASE_URL` and
    `VITE_SUPABASE_ANON_KEY` from your Supabase project's API settings. The
    publishable/anon key is intended for frontend use; never put a service-role
-   key in the Vite environment.
-3. Deploy the `auction-ops` Edge Function in `supabase/functions/auction-ops`
+   key in the Vite environment. Set the three `VITE_EMAILJS_*` values for the
+   Contact Us form using a separate `VITE_EMAILJS_CONTACT_TEMPLATE_ID`.
+   Configure that EmailJS template with `name`, `email`,
+   `title`, and `message` variables, and set the recipient to your support
+   inbox rather than a value supplied by the form.
+3. In Supabase Dashboard, open Authentication settings and enable email
+   confirmations. In the Confirm signup email template, include Supabase's
+   `{{ .Token }}` value so users receive an eight-digit one-time code. The EmailJS template
+   ID is separate from Supabase Auth and cannot verify accounts.
+4. Deploy the `auction-ops` Edge Function in `supabase/functions/auction-ops`
    and set its Supabase secrets as required by that function. Redeploy it after
    updating the function source.
-4. Install Node.js 20 or later, run `npm install`, then run `npm run dev`.
+5. Install Node.js 20 or later, run `npm install`, then run `npm run dev`.
    Open the local URL printed by Vite, usually `http://localhost:5173`.
 
 To load sample marketplace data, run [`supabase/seed_demo_data.sql`](./supabase/seed_demo_data.sql)

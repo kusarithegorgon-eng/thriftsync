@@ -1,17 +1,22 @@
 import { useEffect, useState } from 'react';
-import { TrendingUp, Package, DollarSign, Eye, Gavel, Plus, ArrowRight, Clock } from 'lucide-react';
+import { TrendingUp, Package, DollarSign, Eye, Gavel, Plus, ArrowRight, Clock, Truck, Share2 } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { supabase, type Listing, type Boutique, type Order } from '@/lib/supabase';
 import { formatPrice, formatTimeAgo, cn } from '@/lib/utils';
+
+type SellerOrder = Order & { listings: Pick<Listing, 'title'> | null };
 
 export function DashboardPage() {
   const { navigate } = useRouter();
   const { user, profile, loading: authLoading } = useAuth();
   const [boutique, setBoutique] = useState<Boutique | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [orders, setOrders] = useState<SellerOrder[]>([]);
   const [loading, setLoading] = useState(true);
+  const [trackingNumbers, setTrackingNumbers] = useState<Record<string, string>>({});
+  const [orderActionLoading, setOrderActionLoading] = useState<string | null>(null);
+  const [orderActionErrors, setOrderActionErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     async function load() {
@@ -39,17 +44,55 @@ export function DashboardPage() {
 
         const { data: orderData } = await supabase
           .from('orders')
-          .select('*')
+          .select('*, listings(title)')
           .eq('boutique_id', (boutiqueData as Boutique).id)
           .order('created_at', { ascending: false })
           .limit(10);
-        setOrders((orderData as Order[]) || []);
+        setOrders((orderData as SellerOrder[]) || []);
       }
 
       setLoading(false);
     }
     if (!authLoading) load();
   }, [user, authLoading]);
+
+  async function markOrderShipped(order: SellerOrder) {
+    const trackingNumber = trackingNumbers[order.id]?.trim();
+    if (!trackingNumber) {
+      setOrderActionErrors((current) => ({ ...current, [order.id]: 'Enter a tracking number.' }));
+      return;
+    }
+
+    setOrderActionLoading(order.id);
+    setOrderActionErrors((current) => ({ ...current, [order.id]: '' }));
+    try {
+      const { error } = await supabase.rpc('mark_order_shipped', {
+        p_order_id: order.id,
+        p_tracking_number: trackingNumber,
+      });
+      if (error) throw error;
+      setOrders((current) => current.map((item) => item.id === order.id
+        ? { ...item, status: 'shipped', tracking_number: trackingNumber }
+        : item));
+    } catch (error) {
+      setOrderActionErrors((current) => ({
+        ...current,
+        [order.id]: error instanceof Error ? error.message : 'Could not update this order.',
+      }));
+    } finally {
+      setOrderActionLoading(null);
+    }
+  }
+
+  function shareListing(listing: Listing, platform: 'facebook' | 'x') {
+    const listingUrl = `${window.location.origin}${window.location.pathname}#/listing/${encodeURIComponent(listing.id)}`;
+    const encodedUrl = encodeURIComponent(listingUrl);
+    const shareUrl = platform === 'facebook'
+      ? `https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`
+      : `https://twitter.com/intent/tweet?text=${encodeURIComponent(`${listing.title} from ${boutique.name}`)}&url=${encodedUrl}`;
+
+    window.open(shareUrl, '_blank', 'noopener,noreferrer');
+  }
 
   if (!authLoading && !user) {
     return (
@@ -157,7 +200,31 @@ export function DashboardPage() {
                         </span>
                       </div>
                     </div>
-                    <p className="text-sm font-semibold text-ink-900 shrink-0">{formatPrice(Number(listing.price))}</p>
+                    <div className="flex shrink-0 flex-col items-end gap-2">
+                      <p className="text-sm font-semibold text-ink-900">{formatPrice(Number(listing.price))}</p>
+                      {listing.status === 'active' && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => shareListing(listing, 'facebook')}
+                            title="Share on Facebook"
+                            aria-label={`Share ${listing.title} on Facebook`}
+                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-medium text-ink-600 hover:bg-ink-100 hover:text-ink-900"
+                          >
+                            <Share2 className="h-3 w-3" /> Facebook
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => shareListing(listing, 'x')}
+                            title="Share on X"
+                            aria-label={`Share ${listing.title} on X`}
+                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-medium text-ink-600 hover:bg-ink-100 hover:text-ink-900"
+                          >
+                            <Share2 className="h-3 w-3" /> X
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))
               )}
@@ -191,7 +258,42 @@ export function DashboardPage() {
                         {order.status.replace('_', ' ')}
                       </span>
                     </div>
+                    <p className="text-xs text-ink-600 truncate">
+                      {order.listings?.title || 'Item'}
+                    </p>
                     <p className="text-xs text-ink-400">{formatTimeAgo(order.created_at)}</p>
+                    {order.status === 'escrow_held' && (
+                      <form
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void markOrderShipped(order);
+                        }}
+                        className="mt-3 space-y-2"
+                      >
+                        <div className="flex gap-2">
+                          <input
+                            value={trackingNumbers[order.id] || ''}
+                            onChange={(event) => setTrackingNumbers((current) => ({ ...current, [order.id]: event.target.value }))}
+                            placeholder="Tracking number"
+                            aria-label="Shipment tracking number"
+                            maxLength={200}
+                            required
+                            className="input-field min-w-0 flex-1 text-xs"
+                          />
+                          <button
+                            type="submit"
+                            disabled={orderActionLoading === order.id}
+                            className="btn-secondary shrink-0 px-2 text-xs inline-flex items-center gap-1"
+                          >
+                            <Truck className="w-3.5 h-3.5" />
+                            {orderActionLoading === order.id ? 'Saving…' : 'Mark shipped'}
+                          </button>
+                        </div>
+                        {orderActionErrors[order.id] && (
+                          <p role="alert" className="text-xs text-terracotta-600">{orderActionErrors[order.id]}</p>
+                        )}
+                      </form>
+                    )}
                   </div>
                 ))
               )}

@@ -107,6 +107,7 @@ export function Header() {
                 onClick={() => navigate({ name: 'cart' })}
                 className="p-2 rounded-lg hover:bg-ink-100 transition-colors relative"
                 aria-label="Cart"
+                title="Cart"
               >
                 <ShoppingBag className={cn('w-5 h-5', isActive('cart') ? 'text-ink-900' : 'text-ink-700')} />
                 {itemCount > 0 && (
@@ -114,6 +115,15 @@ export function Header() {
                     {itemCount}
                   </span>
                 )}
+              </button>
+
+              <button
+                onClick={() => navigate({ name: 'orders' })}
+                className="p-2 rounded-lg hover:bg-ink-100 transition-colors"
+                aria-label="My Orders"
+                title="My Orders"
+              >
+                <Package className={cn('w-5 h-5', isActive('orders') ? 'text-terracotta-600' : 'text-ink-700')} />
               </button>
 
               {user ? (
@@ -214,6 +224,9 @@ export function Header() {
               </MobileNavLink>
               <MobileNavLink onClick={() => navigate({ name: 'dashboard' })} icon={<LayoutDashboard className="w-4 h-4" />}>
                 Dashboard
+              </MobileNavLink>
+              <MobileNavLink onClick={() => navigate({ name: 'orders' })} icon={<Package className="w-4 h-4" />}>
+                My Orders
               </MobileNavLink>
               <MobileNavLink onClick={() => navigate({ name: 'vouchers' })} icon={<Tag className="w-4 h-4" />}>
                 Promo Codes

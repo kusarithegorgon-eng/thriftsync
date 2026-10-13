@@ -6,3 +6,9 @@ verify_jwt = true
 
 [functions.thrift-crawl]
 verify_jwt = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+otp_length = 8
+otp_expiry = 3600

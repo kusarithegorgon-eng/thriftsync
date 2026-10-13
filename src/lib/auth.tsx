@@ -5,8 +5,10 @@ type AuthContextValue = {
   user: { id: string; email: string } | null;
   profile: Profile | null;
   loading: boolean;
-  signUp: (email: string, password: string, displayName: string, role: 'buyer' | 'seller') => Promise<{ error: string | null }>;
+  signUp: (email: string, password: string, displayName: string, role: 'buyer' | 'seller') => Promise<{ error: string | null; verificationRequired: boolean }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  verifySignupOtp: (email: string, token: string) => Promise<{ error: string | null }>;
+  resendSignupOtp: (email: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 };
@@ -71,13 +73,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       email,
       password,
       options: {
+        emailRedirectTo: window.location.origin,
         data: { display_name: displayName, role },
       },
     });
 
-    if (error) return { error: error.message };
+    if (error) return { error: error.message, verificationRequired: false };
 
-    return { error: null };
+    if (data.session) {
+      await supabase.auth.signOut();
+      return {
+        error: 'Email verification is disabled for this project. Enable Confirm email in Supabase Auth settings, then try again.',
+        verificationRequired: false,
+      };
+    }
+
+    return { error: null, verificationRequired: true };
+  }
+
+  async function verifySignupOtp(email: string, token: string) {
+    const { error } = await supabase.auth.verifyOtp({ email, token, type: 'signup' });
+    return { error: error?.message || null };
+  }
+
+  async function resendSignupOtp(email: string) {
+    const { error } = await supabase.auth.resend({ type: 'signup', email });
+    return { error: error?.message || null };
   }
 
   async function signIn(email: string, password: string) {
@@ -101,7 +122,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signUp, signIn, signOut, refreshProfile }}>
+    <AuthContext.Provider value={{ user, profile, loading, signUp, signIn, verifySignupOtp, resendSignupOtp, signOut, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );

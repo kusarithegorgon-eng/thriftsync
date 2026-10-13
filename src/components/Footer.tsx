@@ -57,7 +57,7 @@ export function Footer() {
               <li><a href="#" className="hover:text-cream transition-colors">Help Center</a></li>
               <li><a href="#" className="hover:text-cream transition-colors">Buyer Protection</a></li>
               <li><a href="#" className="hover:text-cream transition-colors">Authenticity</a></li>
-              <li><a href="#" className="hover:text-cream transition-colors">Contact Us</a></li>
+              <li><button onClick={() => navigate({ name: 'contact' })} className="hover:text-cream transition-colors">Contact Us</button></li>
             </ul>
           </div>
         </div>

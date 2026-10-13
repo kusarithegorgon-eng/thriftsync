@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Gavel, Mail, Lock, User, Store, ShoppingBag } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
@@ -6,29 +6,58 @@ import { cn } from '@/lib/utils';
 
 export function AuthPage() {
   const { navigate } = useRouter();
-  const { signIn, signUp } = useAuth();
+  const { user, signIn, signUp, verifySignupOtp, resendSignupOtp } = useAuth();
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [role, setRole] = useState<'buyer' | 'seller'>('buyer');
+  const [awaitingOtp, setAwaitingOtp] = useState(false);
+  const [otp, setOtp] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (awaitingOtp && user) navigate({ name: 'home' });
+  }, [awaitingOtp, user, navigate]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setNotice(null);
     setLoading(true);
+
+    if (awaitingOtp) {
+      const { error: verificationError } = await verifySignupOtp(email, otp);
+      if (verificationError) setError(verificationError);
+      else navigate({ name: 'home' });
+      setLoading(false);
+      return;
+    }
 
     if (mode === 'signin') {
       const { error: signInError } = await signIn(email, password);
       if (signInError) setError(signInError);
       else navigate({ name: 'home' });
     } else {
-      const { error: signUpError } = await signUp(email, password, displayName, role);
+      const { error: signUpError, verificationRequired } = await signUp(email, password, displayName, role);
       if (signUpError) setError(signUpError);
-      else navigate({ name: 'home' });
+      else if (verificationRequired) {
+        setAwaitingOtp(true);
+        setNotice(`Enter the verification code sent to ${email}.`);
+      }
     }
+    setLoading(false);
+  }
+
+  async function resendCode() {
+    setError(null);
+    setNotice(null);
+    setLoading(true);
+    const { error: resendError } = await resendSignupOtp(email);
+    if (resendError) setError(resendError);
+    else setNotice(`A new verification code was sent to ${email}.`);
     setLoading(false);
   }
 
@@ -40,16 +69,18 @@ export function AuthPage() {
             <Gavel className="w-7 h-7 text-cream" strokeWidth={2.2} />
           </div>
           <h1 className="font-serif text-2xl font-bold text-ink-900">
-            {mode === 'signin' ? 'Welcome back' : 'Join ThriftSync'}
+            {awaitingOtp ? 'Verify your email' : mode === 'signin' ? 'Welcome back' : 'Join ThriftSync'}
           </h1>
           <p className="text-sm text-ink-500 mt-1">
-            {mode === 'signin' ? 'Sign in to your account to continue' : 'Create an account to start buying and selling'}
+            {awaitingOtp
+              ? 'Enter the eight-digit code or open the confirmation link in your email to finish creating your account.'
+              : mode === 'signin' ? 'Sign in to your account to continue' : 'Create an account to start buying and selling'}
           </p>
         </div>
 
         <div className="card p-6">
           {/* Mode toggle */}
-          <div className="flex gap-1 p-1 bg-ink-50 rounded-lg mb-5">
+          {!awaitingOtp && <div className="flex gap-1 p-1 bg-ink-50 rounded-lg mb-5">
             <button
               onClick={() => setMode('signin')}
               className={cn(
@@ -68,10 +99,42 @@ export function AuthPage() {
             >
               Sign Up
             </button>
-          </div>
+          </div>}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {mode === 'signup' && (
+            {awaitingOtp ? (
+              <>
+                <div>
+                  <label htmlFor="signup-otp" className="text-xs font-medium text-ink-700 mb-1.5 block">Verification code</label>
+                  <input
+                    id="signup-otp"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    pattern="[0-9]{8}"
+                    maxLength={8}
+                    value={otp}
+                    onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 8))}
+                    placeholder="8-digit code"
+                    className="input-field text-center font-mono tracking-[0.25em]"
+                    required
+                  />
+                </div>
+                {notice && <p role="status" className="text-xs text-sage-700">{notice}</p>}
+                <div className="flex items-center justify-between text-xs">
+                  <button type="button" onClick={() => void resendCode()} disabled={loading} className="text-ink-700 hover:text-terracotta-700 font-medium">
+                    Resend code
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setAwaitingOtp(false); setOtp(''); setError(null); setNotice(null); }}
+                    className="text-ink-500 hover:text-ink-900"
+                  >
+                    Change email
+                  </button>
+                </div>
+              </>
+            ) : mode === 'signup' && (
               <>
                 <div>
                   <label className="text-xs font-medium text-ink-700 mb-1.5 block">Display Name</label>
@@ -116,7 +179,7 @@ export function AuthPage() {
               </>
             )}
 
-            <div>
+            {!awaitingOtp && <div>
               <label className="text-xs font-medium text-ink-700 mb-1.5 block">Email</label>
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-400" />
@@ -129,9 +192,9 @@ export function AuthPage() {
                   required
                 />
               </div>
-            </div>
+            </div>}
 
-            <div>
+            {!awaitingOtp && <div>
               <label className="text-xs font-medium text-ink-700 mb-1.5 block">Password</label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-400" />
@@ -144,7 +207,7 @@ export function AuthPage() {
                   required
                 />
               </div>
-            </div>
+            </div>}
 
             {error && (
               <div className="p-3 bg-terracotta-50 border border-terracotta-200 rounded-lg text-sm text-terracotta-700">
@@ -157,11 +220,11 @@ export function AuthPage() {
               disabled={loading}
               className="w-full btn-primary py-3"
             >
-              {loading ? 'Please wait...' : mode === 'signin' ? 'Sign In' : 'Create Account'}
+              {loading ? 'Please wait...' : awaitingOtp ? 'Verify email' : mode === 'signin' ? 'Sign In' : 'Create Account'}
             </button>
           </form>
 
-          <p className="text-xs text-ink-400 text-center mt-4">
+          {!awaitingOtp && <p className="text-xs text-ink-400 text-center mt-4">
             {mode === 'signin' ? "Don't have an account? " : 'Already have an account? '}
             <button
               onClick={() => setMode(mode === 'signin' ? 'signup' : 'signin')}
@@ -169,7 +232,7 @@ export function AuthPage() {
             >
               {mode === 'signin' ? 'Sign up' : 'Sign in'}
             </button>
-          </p>
+          </p>}
         </div>
       </div>
     </div>

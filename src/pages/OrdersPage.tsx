@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Package, Truck, CheckCircle, Clock, AlertCircle, ArrowRight } from 'lucide-react';
+import { Package, Truck, CheckCircle, CheckCircle2, Clock } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { supabase, type Order, type Listing, type Boutique } from '@/lib/supabase';
@@ -15,6 +15,8 @@ export function OrdersPage() {
   const { user, loading: authLoading } = useAuth();
   const [orders, setOrders] = useState<OrderWithDetails[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deliveryActionId, setDeliveryActionId] = useState<string | null>(null);
+  const [deliveryErrors, setDeliveryErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     async function load() {
@@ -33,6 +35,25 @@ export function OrdersPage() {
     }
     if (!authLoading) load();
   }, [user, authLoading]);
+
+  async function confirmDelivery(orderId: string) {
+    setDeliveryActionId(orderId);
+    setDeliveryErrors((current) => ({ ...current, [orderId]: '' }));
+    try {
+      const { error } = await supabase.rpc('confirm_order_delivered', { p_order_id: orderId });
+      if (error) throw error;
+      setOrders((current) => current.map((order) => order.id === orderId
+        ? { ...order, status: 'delivered' }
+        : order));
+    } catch (error) {
+      setDeliveryErrors((current) => ({
+        ...current,
+        [orderId]: error instanceof Error ? error.message : 'Could not confirm delivery.',
+      }));
+    } finally {
+      setDeliveryActionId(null);
+    }
+  }
 
   if (!authLoading && !user) {
     return (
@@ -118,6 +139,22 @@ export function OrdersPage() {
                 <div className="flex-1 h-px bg-ink-200" />
                 <StatusStep icon={<CheckCircle className="w-3.5 h-3.5" />} label="Delivered" active={['delivered', 'completed'].includes(order.status)} />
               </div>
+              {order.status === 'shipped' && (
+                <div className="mt-3 flex flex-col items-end gap-2">
+                  {deliveryErrors[order.id] && (
+                    <p role="alert" className="text-xs text-terracotta-600">{deliveryErrors[order.id]}</p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void confirmDelivery(order.id)}
+                    disabled={deliveryActionId === order.id}
+                    className="btn-primary inline-flex items-center gap-2 text-sm"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    {deliveryActionId === order.id ? 'Confirming…' : 'Confirm delivery'}
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>
