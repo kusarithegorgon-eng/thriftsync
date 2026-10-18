@@ -49,6 +49,9 @@ export function ThriftCrawlPage() {
   const [showSaved, setShowSaved] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [startLocation, setStartLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [locating, setLocating] = useState(false);
+  const [locationError, setLocationError] = useState('');
 
   useEffect(() => {
     async function load() {
@@ -82,9 +85,9 @@ export function ThriftCrawlPage() {
   }, [user]);
 
   const optimized = useMemo(() => {
-    if (selectedStops.length < 2) return null;
-    return optimizeRoute(selectedStops, transportMode);
-  }, [selectedStops, transportMode]);
+    if (selectedStops.length === 0) return null;
+    return optimizeRoute(selectedStops, transportMode, startLocation || undefined);
+  }, [selectedStops, transportMode, startLocation]);
 
   const filteredBoutiques = useMemo(() => {
     if (!searchQuery) return boutiques;
@@ -130,6 +133,36 @@ export function ThriftCrawlPage() {
     setSelectedStops(reordered.map((s, i) => ({ ...s, stop_order: i + 1 })));
   }
 
+  function useCurrentLocation() {
+    if (!navigator.geolocation) {
+      setLocationError('Location services are not available in this browser.');
+      return;
+    }
+
+    setLocating(true);
+    setLocationError('');
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setStartLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        });
+        setLocating(false);
+      },
+      (error) => {
+        setLocationError(
+          error.code === error.PERMISSION_DENIED
+            ? 'Location permission was denied. Allow location access in your browser settings and try again.'
+            : error.code === error.TIMEOUT
+              ? 'Could not get your location in time. Please try again.'
+              : 'Your current location is unavailable. Please try again.',
+        );
+        setLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+    );
+  }
+
   async function saveItinerary() {
     if (!user) {
       navigate({ name: 'auth' });
@@ -139,6 +172,7 @@ export function ThriftCrawlPage() {
 
     setSaving(true);
     try {
+      const savedRoute = optimizeRoute(selectedStops, transportMode);
       const stopsData = selectedStops.map((s, i) => ({
         boutique_id: s.boutique_id,
         stop_order: i + 1,
@@ -154,8 +188,8 @@ export function ThriftCrawlPage() {
           name: itineraryName,
           stops: stopsData,
           transport_mode: transportMode,
-          total_distance_km: optimized?.total_distance_km ?? 0,
-          total_time_minutes: optimized?.total_time_minutes ?? 0,
+          total_distance_km: savedRoute.total_distance_km,
+          total_time_minutes: savedRoute.total_time_minutes,
           scheduled_date: scheduledDate || null,
           status: 'planned',
         })
@@ -183,8 +217,20 @@ export function ThriftCrawlPage() {
   }
 
   const routePositions = optimized
-    ? optimized.ordered_stops.map((s) => [s.lat, s.lng] as [number, number])
+    ? [
+      ...(startLocation ? [[startLocation.lat, startLocation.lng] as [number, number]] : []),
+      ...optimized.ordered_stops.map((s) => [s.lat, s.lng] as [number, number]),
+    ]
     : selectedStops.map((s) => [s.lat, s.lng] as [number, number]);
+  const displayedStops = optimized?.ordered_stops || selectedStops;
+  const mapPoints = [
+    ...selectedStops.map(({ lat: pointLat, lng: pointLng }) => ({ lat: pointLat, lng: pointLng })),
+    ...(startLocation ? [startLocation] : []),
+  ];
+  const firstStop = optimized?.ordered_stops[0];
+  const directionsUrl = startLocation && firstStop
+    ? `https://www.google.com/maps/dir/?api=1&origin=${startLocation.lat},${startLocation.lng}&destination=${firstStop.lat},${firstStop.lng}&travelmode=${transportMode === 'walking' ? 'walking' : transportMode === 'jeepney' ? 'transit' : 'driving'}`
+    : null;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
@@ -196,7 +242,7 @@ export function ThriftCrawlPage() {
             Thrift Crawl Planner
           </h1>
           <p className="text-sm text-ink-500">
-            Build a multi-stop itinerary across Cebu's vintage boutiques. Pick your transport, optimize the route, and save your crawl.
+            Plan a real-world shopping trip to visit thrift boutiques around Cebu. Add at least two stops, choose how you will travel, then save the route.
           </p>
         </div>
         {savedItineraries.length > 0 && (
@@ -210,6 +256,15 @@ export function ThriftCrawlPage() {
             Saved Crawls ({savedItineraries.length})
           </button>
         )}
+      </div>
+
+      <div className="mb-6 rounded-lg border border-sage-200 bg-sage-50 p-4">
+        <p className="text-sm font-medium text-sage-900">For buyers and sellers</p>
+        <p className="mt-1 text-xs leading-relaxed text-sage-800">
+          Buyers can plan visits to browse participating boutiques in person. Sellers can use the same planner to plan visits to other boutiques.
+          This is a trip planner only; it does not manage your own listings, customer orders, deliveries, or locker handoffs.
+          You can build a route without signing in, but you need to sign in to save it.
+        </p>
       </div>
 
       {/* Saved itineraries panel */}
@@ -253,7 +308,7 @@ export function ThriftCrawlPage() {
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 attribution="&copy; OpenStreetMap contributors"
               />
-              {selectedStops.map((stop, i) => (
+              {displayedStops.map((stop, i) => (
                 <Marker
                   key={stop.boutique_id}
                   position={[stop.lat, stop.lng]}
@@ -271,15 +326,67 @@ export function ThriftCrawlPage() {
                   </Popup>
                 </Marker>
               ))}
+              {startLocation && (
+                <Marker
+                  position={[startLocation.lat, startLocation.lng]}
+                  icon={L.divIcon({
+                    className: '',
+                    html: '<div style="width:18px;height:18px;border-radius:50%;background:#2563eb;border:3px solid white;box-shadow:0 1px 6px rgba(0,0,0,0.5)"></div>',
+                    iconSize: [18, 18],
+                    iconAnchor: [9, 9],
+                  })}
+                >
+                  <Popup>
+                    <div className="text-sm font-medium">Your current location</div>
+                  </Popup>
+                </Marker>
+              )}
               {routePositions.length >= 2 && (
                 <Polyline positions={routePositions} pathOptions={{ color: '#b45309', weight: 3, opacity: 0.7, dashArray: '8 6' }} />
               )}
-              <FitBounds stops={selectedStops} />
+              <FitBounds stops={mapPoints} />
             </MapContainer>
           </div>
 
+          <div className="card p-4">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-medium text-ink-900 flex items-center gap-2">
+                  <MapPin className="w-4 h-4 text-blue-600" />
+                  Start from where you are
+                </h3>
+                <p className="text-xs text-ink-500 mt-1">
+                  Allow location access to add your current position and route to the nearest selected boutique.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {startLocation && (
+                  <button
+                    type="button"
+                    onClick={() => setStartLocation(null)}
+                    className="btn-secondary text-xs"
+                  >
+                    Clear location
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={useCurrentLocation}
+                  disabled={locating}
+                  className="btn-primary inline-flex items-center gap-2 text-xs"
+                >
+                  <Navigation className="w-3.5 h-3.5" />
+                  {locating ? 'Getting location…' : startLocation ? 'Update my location' : 'Use my location'}
+                </button>
+              </div>
+            </div>
+            {locationError && (
+              <p role="alert" className="mt-2 text-xs text-terracotta-600">{locationError}</p>
+            )}
+          </div>
+
           {/* Route summary */}
-          {optimized && selectedStops.length >= 2 && (
+          {optimized && (selectedStops.length >= 2 || !!startLocation) && (
             <div className="card p-4">
               <div className="grid grid-cols-3 gap-4 text-center">
                 <div>
@@ -297,8 +404,32 @@ export function ThriftCrawlPage() {
               </div>
               <div className="mt-3 pt-3 border-t border-ink-100">
                 <p className="text-xs text-ink-400 text-center">
-                  Route optimized using nearest-neighbor algorithm for {transportMode} mode
+                  Estimated straight-line distances optimized for {transportMode} mode; real streets and traffic may differ.
                 </p>
+                {startLocation && firstStop && (
+                  <p className="mt-2 text-xs text-ink-500 text-center">
+                    Your first stop is {firstStop.boutique_name}.
+                    {directionsUrl && (
+                      <>
+                        {' '}
+                        <a
+                          href={directionsUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-medium text-terracotta-700 underline"
+                        >
+                          Get directions there
+                        </a>
+                        {' '}                        in Google Maps (which receives the two locations when opened).
+                      </>
+                    )}
+                  </p>
+                )}
+                {startLocation && (
+                  <p className="mt-1 text-[10px] text-ink-400 text-center">
+                    Your location is used for this route only and is not saved with the itinerary.
+                  </p>
+                )}
               </div>
             </div>
           )}

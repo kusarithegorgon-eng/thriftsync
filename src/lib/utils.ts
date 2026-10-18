@@ -322,12 +322,13 @@ const TRANSFER_OVERHEAD: Record<TransportMode, number> = {
 export function optimizeRoute(
   stops: ItineraryStop[],
   transportMode: TransportMode = 'driving',
+  startLocation?: { lat: number; lng: number },
 ): OptimizedRoute {
   if (stops.length === 0) {
     return { ordered_stops: [], segments: [], total_distance_km: 0, total_time_minutes: 0 };
   }
 
-  if (stops.length === 1) {
+  if (stops.length === 1 && !startLocation) {
     return { ordered_stops: stops, segments: [], total_distance_km: 0, total_time_minutes: 0 };
   }
 
@@ -341,9 +342,38 @@ export function optimizeRoute(
   let totalDist = 0;
   let totalTime = 0;
 
-  let current = unvisited.shift()!;
-  current.stop_order = 1;
+  let current = startLocation
+    ? unvisited.splice(
+      unvisited.reduce((nearestIndex, stop, index, allStops) => (
+        haversineDistance(startLocation.lat, startLocation.lng, stop.lat, stop.lng)
+          < haversineDistance(startLocation.lat, startLocation.lng, allStops[nearestIndex].lat, allStops[nearestIndex].lng)
+          ? index
+          : nearestIndex
+      ), 0),
+      1,
+    )[0]
+    : unvisited.shift()!;
+  current = { ...current, stop_order: 1 };
   ordered.push(current);
+
+  if (startLocation) {
+    const startDistance = haversineDistance(
+      startLocation.lat,
+      startLocation.lng,
+      current.lat,
+      current.lng,
+    );
+    segments.push({
+      from_lat: startLocation.lat,
+      from_lng: startLocation.lng,
+      to_lat: current.lat,
+      to_lng: current.lng,
+      distance_km: startDistance,
+      time_minutes: (startDistance / speed) * 60 + overhead,
+    });
+    totalDist += startDistance;
+    totalTime += (startDistance / speed) * 60 + overhead;
+  }
 
   while (unvisited.length > 0) {
     let nearestIdx = 0;

@@ -42,6 +42,42 @@ listings, and three completed demo orders. The five unsold listings appear in
 the marketplace; demo orders remain subject to the app's existing order access
 policies.
 
+### Demo the partner locker handoff
+
+Use a development/demo Supabase project and apply
+[`20261014000000_connect_locker_checkout_and_fulfillment.sql`](./supabase/migrations/20261014000000_connect_locker_checkout_and_fulfillment.sql)
+first. Create two separate ThriftSync accounts: one with the `buyer` profile
+role and one with the `seller` profile role. In
+[`supabase/seed_demo_locker_flow.sql`](./supabase/seed_demo_locker_flow.sql),
+replace the two example email values at the top with those account emails, then
+run the script in the Supabase SQL Editor.
+
+The script adds one clearly labeled demo order and a pending locker handoff to
+those accounts. Sign in as the buyer and open **My Orders** to see the locker
+address and demo PIN `482915`. Sign in as the seller and open the seller
+dashboard, enter that PIN under the demo order, and confirm the drop-off. Return
+to the buyer account; the order will be ready for locker pickup. Enter the same
+PIN in **My Orders** to confirm pickup and finish the status flow. This is a UI
+workflow demo only: it does not charge a payment method or connect to physical
+locker hardware. The SQL seed is intentionally not a reset script; it will not
+reopen or overwrite the demo order after you progress it.
+
+### What the Thrift Crawl Planner is for
+
+The planner is a separate, optional tool for mapping an in-person shopping trip
+between boutiques. Buyers can plan which shops to visit; sellers can use it as
+shoppers to plan visits to other boutiques. Add at least two boutiques, choose
+walking, driving, or jeepney travel, review the estimated route, and sign in to
+save it. Use **Use my location** to include your current position as the route
+origin; the planner will select the nearest chosen boutique as the first stop.
+The map and travel-time estimates are approximate straight-line estimates.
+**Get directions there** opens Google Maps for turn-by-turn routing to the first
+stop and shares your selected current coordinates with Google Maps. Your current
+location is not stored in a saved itinerary. The planner does not plan a seller's
+delivery route or change listing, order, or locker status. Locker pickup and
+order fulfillment are handled from checkout, the buyer's **My Orders**, and the
+seller dashboard instead.
+
 Create accounts through the app's Sign Up page. To grant an account
 administrator access, update its `profiles.role` to `admin` in the Supabase
 Dashboard after signing up. Sellers can choose English auctions, where buyers

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { TrendingUp, Package, DollarSign, Eye, Gavel, Plus, ArrowRight, Clock, Truck, Share2 } from 'lucide-react';
+import { TrendingUp, Package, DollarSign, Eye, Gavel, Plus, ArrowRight, Clock, Truck, Share2, KeyRound } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { supabase, type Listing, type Boutique, type Order } from '@/lib/supabase';
@@ -15,6 +15,7 @@ export function DashboardPage() {
   const [orders, setOrders] = useState<SellerOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [trackingNumbers, setTrackingNumbers] = useState<Record<string, string>>({});
+  const [lockerPins, setLockerPins] = useState<Record<string, string>>({});
   const [orderActionLoading, setOrderActionLoading] = useState<string | null>(null);
   const [orderActionErrors, setOrderActionErrors] = useState<Record<string, string>>({});
 
@@ -62,7 +63,6 @@ export function DashboardPage() {
       setOrderActionErrors((current) => ({ ...current, [order.id]: 'Enter a tracking number.' }));
       return;
     }
-
     setOrderActionLoading(order.id);
     setOrderActionErrors((current) => ({ ...current, [order.id]: '' }));
     try {
@@ -84,7 +84,39 @@ export function DashboardPage() {
     }
   }
 
+  async function markLockerOrderDroppedOff(order: SellerOrder) {
+    const pin = lockerPins[order.id]?.trim();
+    if (!pin || !/^\d{6}$/.test(pin)) {
+      setOrderActionErrors((current) => ({ ...current, [order.id]: 'Enter the buyer’s 6-digit locker PIN.' }));
+      return;
+    }
+
+    setOrderActionLoading(order.id);
+    setOrderActionErrors((current) => ({ ...current, [order.id]: '' }));
+    try {
+      const { data, error } = await supabase.rpc('mark_order_locker_dropped_off', {
+        p_order_id: order.id,
+        p_pin_code: pin,
+      });
+      if (error) throw error;
+      const result = data?.[0];
+      if (!result?.success) throw new Error(result?.message || 'Could not record locker drop-off.');
+      setOrders((current) => current.map((item) => item.id === order.id
+        ? { ...item, status: 'shipped' }
+        : item));
+      setLockerPins((current) => ({ ...current, [order.id]: '' }));
+    } catch (error) {
+      setOrderActionErrors((current) => ({
+        ...current,
+        [order.id]: error instanceof Error ? error.message : 'Could not record locker drop-off.',
+      }));
+    } finally {
+      setOrderActionLoading(null);
+    }
+  }
+
   function shareListing(listing: Listing, platform: 'facebook' | 'x') {
+    if (!boutique) return;
     const listingUrl = `${window.location.origin}${window.location.pathname}#/listing/${encodeURIComponent(listing.id)}`;
     const encodedUrl = encodeURIComponent(listingUrl);
     const shareUrl = platform === 'facebook'
@@ -262,7 +294,42 @@ export function DashboardPage() {
                       {order.listings?.title || 'Item'}
                     </p>
                     <p className="text-xs text-ink-400">{formatTimeAgo(order.created_at)}</p>
-                    {order.status === 'escrow_held' && (
+                    {order.status === 'escrow_held' && order.delivery_method === 'locker' && (
+                      <form
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void markLockerOrderDroppedOff(order);
+                        }}
+                        className="mt-3 space-y-2"
+                      >
+                        <p className="text-xs text-ink-500">Enter the PIN provided by the buyer after you place the item in the selected locker.</p>
+                        <div className="flex gap-2">
+                          <input
+                            value={lockerPins[order.id] || ''}
+                            onChange={(event) => setLockerPins((current) => ({ ...current, [order.id]: event.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                            placeholder="6-digit PIN"
+                            aria-label="Buyer locker handoff PIN"
+                            inputMode="numeric"
+                            pattern="[0-9]{6}"
+                            maxLength={6}
+                            required
+                            className="input-field min-w-0 flex-1 text-xs font-mono"
+                          />
+                          <button
+                            type="submit"
+                            disabled={orderActionLoading === order.id}
+                            className="btn-secondary shrink-0 px-2 text-xs inline-flex items-center gap-1"
+                          >
+                            <KeyRound className="w-3.5 h-3.5" />
+                            {orderActionLoading === order.id ? 'Saving…' : 'Confirm drop-off'}
+                          </button>
+                        </div>
+                        {orderActionErrors[order.id] && (
+                          <p role="alert" className="text-xs text-terracotta-600">{orderActionErrors[order.id]}</p>
+                        )}
+                      </form>
+                    )}
+                    {order.status === 'escrow_held' && order.delivery_method !== 'locker' && (
                       <form
                         onSubmit={(event) => {
                           event.preventDefault();

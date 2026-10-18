@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react';
-import { Shield, Check, ArrowLeft, Leaf, Truck, Tag, X, AlertCircle, MapPin, Package, Navigation } from 'lucide-react';
+import { Shield, Check, ArrowLeft, Leaf, Truck, Tag, X, AlertCircle, MapPin, Package, Navigation, Lock } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { useCart } from '@/lib/cart';
-import { supabase, type Voucher, type Boutique, type CebuBarangay } from '@/lib/supabase';
+import { supabase, type Voucher, type Boutique, type LockerLocation } from '@/lib/supabase';
 import { formatPrice, CEBU_BARANGAYS, isWithinCebu, findNearestBarangay, haversineDistance, cn } from '@/lib/utils';
 import { CebuMap } from '@/components/CebuMap';
 
-type DeliveryMode = 'courier' | 'pickup';
+type DeliveryMode = 'courier' | 'pickup' | 'locker';
 
 export function CheckoutPage() {
   const { navigate } = useRouter();
@@ -29,6 +29,9 @@ export function CheckoutPage() {
   const [geoError, setGeoError] = useState<string | null>(null);
   const [pickupBoutiques, setPickupBoutiques] = useState<Boutique[]>([]);
   const [selectedPickupBoutique, setSelectedPickupBoutique] = useState<string | null>(null);
+  const [lockers, setLockers] = useState<LockerLocation[]>([]);
+  const [selectedLockerId, setSelectedLockerId] = useState('');
+  const [lockerLoadError, setLockerLoadError] = useState<string | null>(null);
 
   const hasAuctionItems = items.some((i) => i.listing.listing_type === 'auction');
   const boutiqueIds = items.map((i) => i.listing.boutique_id).filter(Boolean) as string[];
@@ -51,6 +54,23 @@ export function CheckoutPage() {
 
   const barangays = CEBU_BARANGAYS.filter((b) => b.city === city);
   const selectedPickup = pickupBoutiques.find((b) => b.id === selectedPickupBoutique);
+  const selectedLocker = lockers.find((locker) => locker.id === selectedLockerId);
+
+  useEffect(() => {
+    async function loadLockers() {
+      const { data, error } = await supabase
+        .from('locker_locations')
+        .select('*')
+        .eq('is_active', true)
+        .order('partner_name');
+      if (error) {
+        setLockerLoadError(`Could not load locker locations: ${error.message}`);
+        return;
+      }
+      setLockers((data as LockerLocation[]) || []);
+    }
+    void loadLockers();
+  }, []);
 
   function handleBarangaySelect(selectedName: string) {
     setBarangay(selectedName);
@@ -132,7 +152,9 @@ export function CheckoutPage() {
 
   const cebuAddressValid = deliveryMode === 'pickup'
     ? !!selectedPickupBoutique
-    : name && address && barangay && lat && lng && isWithinCebu(lat, lng);
+    : deliveryMode === 'locker'
+      ? !!selectedLocker && selectedLocker.capacity_available >= items.length
+      : !!(name && address && barangay && lat && lng && isWithinCebu(lat, lng));
 
   async function handlePlaceOrder() {
     if (!user) {
@@ -144,7 +166,9 @@ export function CheckoutPage() {
 
     const fullAddress = deliveryMode === 'pickup'
       ? `PICKUP at ${selectedPickup?.name || 'boutique'}, ${selectedPickup?.barangay || ''}, ${selectedPickup?.location || 'Cebu'}`
-      : `${name}, ${address}, ${barangay}, ${city}, Cebu, Philippines (${lat?.toFixed(4)}, ${lng?.toFixed(4)})`;
+      : deliveryMode === 'locker'
+        ? `LOCKER at ${selectedLocker?.partner_name || ''}, ${selectedLocker?.address || ''}, ${selectedLocker?.city_municipality || ''}`
+        : `${name}, ${address}, ${barangay}, ${city}, Cebu, Philippines (${lat?.toFixed(4)}, ${lng?.toFixed(4)})`;
 
     try {
       const { data: availableListings, error: availabilityError } = await supabase
@@ -169,13 +193,15 @@ export function CheckoutPage() {
         );
       }
 
-      const { error } = await supabase.rpc('checkout_fixed_items', {
+      const { error } = await supabase.rpc('checkout_fixed_items_with_fulfillment', {
         p_shipping_address: fullAddress,
         p_items: items.map(({ listing }) => ({
           listing_id: listing.id,
           amount: Number(listing.price),
         })),
         p_voucher_code: appliedVoucher?.code || null,
+        p_delivery_method: deliveryMode,
+        p_locker_location_id: deliveryMode === 'locker' ? selectedLockerId : null,
       });
       if (error) {
         if (error.message.includes('One or more cart items are no longer available.')) {
@@ -209,7 +235,9 @@ export function CheckoutPage() {
         </div>
         <h1 className="font-serif text-2xl font-bold text-ink-900 mb-2">Order Placed Successfully</h1>
         <p className="text-sm text-ink-500 mb-6">
-          {deliveryMode === 'pickup'
+          {deliveryMode === 'locker'
+            ? 'Your locker PIN is available in My Orders. Share it with the seller for drop-off, then use it to confirm pickup after the item is deposited.'
+            : deliveryMode === 'pickup'
             ? 'Your items are ready for pickup at the boutique in Cebu. Coordinate with the seller for pickup details.'
             : 'Your items will be delivered via local courier within Cebu. Payment is held in escrow until delivery confirmation.'}
         </p>
@@ -252,7 +280,7 @@ export function CheckoutPage() {
               </div>
 
               {/* Delivery mode toggle */}
-              <div className="grid grid-cols-2 gap-2 mb-5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-5">
                 <button
                   onClick={() => setDeliveryMode('courier')}
                   className={cn(
@@ -274,9 +302,55 @@ export function CheckoutPage() {
                   <Package className="w-4 h-4" /> Local Pickup
                   {pickupBoutiques.length === 0 && <span className="text-[10px] text-ink-400">(none available)</span>}
                 </button>
+                <button
+                  onClick={() => setDeliveryMode('locker')}
+                  className={cn(
+                    'flex items-center gap-2 p-3 rounded-lg border-2 transition-colors text-sm font-medium',
+                    deliveryMode === 'locker' ? 'border-ink-900 bg-ink-50 text-ink-900' : 'border-ink-200 text-ink-500 hover:border-ink-300',
+                  )}
+                >
+                  <Lock className="w-4 h-4" /> Partner Locker
+                </button>
               </div>
 
-              {deliveryMode === 'courier' ? (
+              {deliveryMode === 'locker' ? (
+                <section>
+                  <h2 className="text-sm font-medium text-ink-900 mb-2">Choose a locker</h2>
+                  <p className="text-xs text-ink-500 mb-3">
+                    Each item needs a compartment. Your PIN will appear in My Orders after checkout.
+                  </p>
+                  {lockerLoadError && (
+                    <p role="alert" className="text-xs text-terracotta-600 mb-3">{lockerLoadError}</p>
+                  )}
+                  <div className="space-y-2">
+                    {lockers.map((locker) => {
+                      const hasCapacity = locker.capacity_available >= items.length;
+                      return (
+                        <button
+                          key={locker.id}
+                          type="button"
+                          onClick={() => setSelectedLockerId(locker.id)}
+                          disabled={!hasCapacity}
+                          className={cn(
+                            'w-full text-left p-3 rounded-lg border-2 transition-colors',
+                            selectedLockerId === locker.id ? 'border-ink-900 bg-ink-50' : 'border-ink-200 hover:border-ink-300',
+                            !hasCapacity && 'opacity-50 cursor-not-allowed',
+                          )}
+                        >
+                          <span className="block text-sm font-medium text-ink-900">{locker.partner_name}</span>
+                          <span className="block text-xs text-ink-500">{locker.address}, {locker.city_municipality}</span>
+                          <span className="block text-xs text-ink-400 mt-1">
+                            {hasCapacity ? `${locker.capacity_available} compartments available` : 'Not enough compartments for your cart'}
+                          </span>
+                        </button>
+                      );
+                    })}
+                    {!lockerLoadError && lockers.length === 0 && (
+                      <p className="text-sm text-ink-500 py-4 text-center">No active locker locations are available.</p>
+                    )}
+                  </div>
+                </section>
+              ) : deliveryMode === 'courier' ? (
                 <>
                   <h2 className="text-sm font-medium text-ink-900 mb-4">Delivery Address (Cebu Only)</h2>
                   <div className="space-y-3">
@@ -446,7 +520,8 @@ export function CheckoutPage() {
 
               <div className="flex gap-2 mt-4">
                 <div className="flex items-center gap-1.5 text-xs text-ink-500">
-                  <Truck className="w-3.5 h-3.5" /> {deliveryMode === 'pickup' ? 'Local pickup in Cebu' : 'Local courier within Cebu'}
+                  <Truck className="w-3.5 h-3.5" />
+                  {deliveryMode === 'pickup' ? 'Local pickup in Cebu' : deliveryMode === 'locker' ? 'Partner locker pickup' : 'Local courier within Cebu'}
                 </div>
                 <div className="flex items-center gap-1.5 text-xs text-ink-500">
                   <Leaf className="w-3.5 h-3.5" /> Carbon offset included
@@ -497,12 +572,14 @@ export function CheckoutPage() {
 
               <div className="bg-ink-50 rounded-lg p-3 mb-4 text-sm">
                 <p className="text-xs font-medium text-ink-700 mb-1">
-                  {deliveryMode === 'pickup' ? 'Pickup at:' : 'Deliver to:'}
+                  {deliveryMode === 'pickup' ? 'Pickup at:' : deliveryMode === 'locker' ? 'Locker pickup at:' : 'Deliver to:'}
                 </p>
                 <p className="text-xs text-ink-600">
                   {deliveryMode === 'pickup'
                     ? `${selectedPickup?.name}, ${selectedPickup?.barangay || ''}, ${selectedPickup?.location || 'Cebu'}`
-                    : `${name}, ${address}, ${barangay}, ${city}, Cebu, Philippines`}
+                    : deliveryMode === 'locker'
+                      ? `${selectedLocker?.partner_name}, ${selectedLocker?.address}, ${selectedLocker?.city_municipality}`
+                      : `${name}, ${address}, ${barangay}, ${city}, Cebu, Philippines`}
                 </p>
               </div>
 
@@ -552,8 +629,8 @@ export function CheckoutPage() {
                 </div>
               )}
               <div className="flex justify-between text-ink-600">
-                <span>{deliveryMode === 'pickup' ? 'Pickup' : 'Courier Delivery'}</span>
-                <span className="text-sage-600">{deliveryMode === 'pickup' ? 'Free' : 'Free'}</span>
+                <span>{deliveryMode === 'pickup' ? 'Pickup' : deliveryMode === 'locker' ? 'Locker Pickup' : 'Courier Delivery'}</span>
+                <span className="text-sage-600">Free</span>
               </div>
               <div className="border-t border-ink-100 pt-2 mt-2 flex justify-between font-semibold text-ink-900">
                 <span>Total</span>
