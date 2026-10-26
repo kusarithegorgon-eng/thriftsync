@@ -3,7 +3,7 @@ import {
   ShieldCheck, CheckCircle2, XCircle, Clock, Search, Package, CheckSquare,
   ChevronRight, AlertCircle, Store, RefreshCw,
 } from 'lucide-react';
-import { supabase, type ListingWithBoutique } from '@/lib/supabase';
+import { supabase, type ListingWithBoutique, type Report } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { useRouter } from '@/lib/router';
 import { formatPrice, formatTimeAgo, cn } from '@/lib/utils';
@@ -22,6 +22,7 @@ export function AdminPage() {
   const [rejectModal, setRejectModal] = useState<{ listingId: string | null; listingTitle: string } | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [selectedListing, setSelectedListing] = useState<ListingWithBoutique | null>(null);
+  const [reports, setReports] = useState<Report[]>([]);
 
   const loadListings = useCallback(async () => {
     setLoading(true);
@@ -55,6 +56,14 @@ export function AdminPage() {
   useEffect(() => {
     if (user && profile?.role === 'admin') {
       loadListings();
+      supabase
+        .from('reports')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(25)
+        .then(({ data, error }) => {
+          if (!error) setReports((data as Report[]) || []);
+        });
     }
   }, [user, profile, loadListings]);
 
@@ -96,6 +105,27 @@ export function AdminPage() {
       }
     } catch (err) {
       setActionMessage({ id: listingId, text: err instanceof Error ? err.message : 'Failed to reject', success: false });
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function resolveReport(reportId: string, action: 'dismiss' | 'refund' | 'sanction', notes: string) {
+    setActionLoading(`report-${reportId}`);
+    try {
+      const { data, error } = await supabase.rpc('resolve_report', {
+        p_report_id: reportId,
+        p_action: action,
+        p_admin_notes: notes || null,
+      });
+      if (error) throw error;
+      const result = data?.[0];
+      if (result?.success) {
+        setReports((prev) => prev.map((report) => report.id === reportId ? { ...report, status: action === 'dismiss' ? 'resolved_dismissed' : 'resolved_refunded', admin_notes: notes || report.admin_notes } : report));
+      }
+      setActionMessage({ id: `report-${reportId}`, text: result?.message || 'Report updated.', success: result?.success ?? true });
+    } catch (err) {
+      setActionMessage({ id: `report-${reportId}`, text: err instanceof Error ? err.message : 'Report action failed.', success: false });
     } finally {
       setActionLoading(null);
     }
@@ -427,6 +457,78 @@ export function AdminPage() {
           ))}
         </div>
       )}
+
+      <div className="mt-10">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-serif text-2xl font-bold text-ink-900">Reports & Escalations</h2>
+          <span className="text-xs text-ink-500">{reports.length} total</span>
+        </div>
+        {reports.length === 0 ? (
+          <div className="card p-6 text-sm text-ink-500">No informal reports have been submitted yet.</div>
+        ) : (
+          <div className="space-y-3">
+            {reports.map((report) => (
+              <div key={report.id} className="card p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="badge bg-ink-100 text-ink-700">{report.category === 'product_fraud' ? 'Product Fraud' : 'Illegal Item'}</span>
+                      <span className={cn(
+                        'badge',
+                        report.status === 'pending' ? 'bg-amber-100 text-amber-700' : report.status === 'resolved_refunded' ? 'bg-terracotta-100 text-terracotta-700' : 'bg-sage-100 text-sage-700',
+                      )}>
+                        {report.status.replace('_', ' ')}
+                      </span>
+                    </div>
+                    <p className="text-sm text-ink-600 leading-relaxed">{report.description || 'No description provided'}</p>
+                    <p className="mt-2 text-[11px] text-ink-400">
+                      Listing: {report.listing_id || '—'} · Order: {report.order_id || '—'} · Evidence: {report.evidence_urls.length}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => resolveReport(report.id, 'dismiss', 'Dismissed by admin; escrow released to seller.')}
+                      disabled={actionLoading === `report-${report.id}`}
+                      className="btn-secondary text-xs px-3 py-2"
+                    >
+                      Dismiss
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => resolveReport(report.id, 'refund', 'Issued buyer refund from escrow.')}
+                      disabled={actionLoading === `report-${report.id}`}
+                      className="btn-primary text-xs px-3 py-2"
+                    >
+                      Refund Buyer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => resolveReport(report.id, 'sanction', 'Seller sanctioned for policy violation.')}
+                      disabled={actionLoading === `report-${report.id}`}
+                      className="btn-secondary text-xs px-3 py-2"
+                    >
+                      Sanction Seller
+                    </button>
+                  </div>
+                </div>
+                {report.admin_notes && (
+                  <p className="mt-2 text-xs text-ink-500">Admin note: {report.admin_notes}</p>
+                )}
+                {report.evidence_urls.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {report.evidence_urls.slice(0, 3).map((url, index) => (
+                      <a key={`${report.id}-${index}`} href={url} target="_blank" rel="noreferrer" className="text-xs text-terracotta-600 underline break-all">
+                        Evidence {index + 1}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Reject modal */}
       {rejectModal && (

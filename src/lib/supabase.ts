@@ -11,7 +11,8 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 export type Profile = {
   id: string; role: 'buyer' | 'seller' | 'admin'; display_name: string;
   avatar_url: string | null; bio: string | null; default_lat: number | null;
-  default_lng: number | null; default_barangay: string | null; created_at: string;
+  default_lng: number | null; default_barangay: string | null; is_banned: boolean;
+  created_at: string;
 };
 export type Boutique = {
   id: string; seller_id: string; name: string; slug: string; tagline: string | null;
@@ -38,9 +39,19 @@ export type Listing = {
   sku: string | null; coa_verified: boolean; views: number; created_at: string;
 };
 export type Bid = { id: string; listing_id: string; bidder_id: string; amount: number; is_winning: boolean; created_at: string };
+export type ReportCategory = 'illegal_item' | 'product_fraud';
+export type ReportStatus = 'pending' | 'under_review' | 'resolved_refunded' | 'resolved_dismissed';
+export type Report = {
+  id: string; reporter_id: string; reported_user_id: string; listing_id: string | null; order_id: string | null;
+  category: ReportCategory; description: string | null; evidence_urls: string[]; status: ReportStatus;
+  admin_notes: string | null; created_at: string;
+};
+export type AdminAuditLog = {
+  id: string; report_id: string | null; actor_id: string | null; action: string; details: Record<string, unknown> | null; created_at: string;
+};
 export type Order = {
   id: string; buyer_id: string; listing_id: string; boutique_id: string; amount: number;
-  status: 'escrow_held' | 'shipped' | 'delivered' | 'completed' | 'disputed' | 'refunded';
+  status: 'escrow_held' | 'shipped' | 'delivered' | 'completed' | 'disputed' | 'refunded' | 'in_escrow';
   shipping_address: string | null; tracking_number: string | null; delivery_method: 'courier' | 'pickup' | 'locker';
   locker_location_id: string | null; created_at: string;
 };

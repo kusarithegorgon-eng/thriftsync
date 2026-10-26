@@ -1,11 +1,12 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Gavel, Heart, BadgeCheck, Eye, Clock, MapPin, MessageCircle, ArrowLeft, Shield, Truck, Leaf, ChevronRight, AlertCircle, TrendingDown, Zap, Camera } from 'lucide-react';
+import { Gavel, Heart, BadgeCheck, Clock, MapPin, MessageCircle, Shield, Truck, Leaf, ChevronRight, AlertCircle, TrendingDown, Zap } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { useCart } from '@/lib/cart';
-import { supabase, type Listing, type Boutique, type Bid, type Review, type ListingWithBoutique, type ImageMetadata, type BidResult } from '@/lib/supabase';
+import { supabase, type Listing, type Boutique, type Bid, type ListingWithBoutique, type ImageMetadata, type BidResult, type Order } from '@/lib/supabase';
 import { formatPrice, formatPriceDetailed, formatCountdown, isAuctionActive, formatTimeAgo, cn, getMinNextBid, getIncrementTierLabel, computeDutchPrice, getNextDropTime } from '@/lib/utils';
 import { ListingCard } from '@/components/ListingCard';
+import { ReportSubmissionModal } from '@/components/ReportSubmissionModal';
 
 export function ListingDetailPage({ listingId }: { listingId: string }) {
   const { navigate } = useRouter();
@@ -15,8 +16,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
   const [listing, setListing] = useState<Listing | null>(null);
   const [boutique, setBoutique] = useState<Boutique | null>(null);
   const [bids, setBids] = useState<Bid[]>([]);
-  const [relatedListings, setRelatedListings] = useState<any[]>([]);
-  const [reviews, setReviews] = useState<Review[]>([]);
+  const [relatedListings, setRelatedListings] = useState<ListingWithBoutique[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedImage, setSelectedImage] = useState(0);
   const [bidAmount, setBidAmount] = useState('');
@@ -26,6 +26,9 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
   const [timeLeft, setTimeLeft] = useState('');
   const [showMessageForm, setShowMessageForm] = useState(false);
   const [messageBody, setMessageBody] = useState('');
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportCategory, setReportCategory] = useState<'illegal_item' | 'product_fraud'>('illegal_item');
+  const [userOrderForListing, setUserOrderForListing] = useState<Order | null>(null);
   const [dutchPrice, setDutchPrice] = useState<number | null>(null);
   const [nextDropIn, setNextDropIn] = useState('');
   const [claiming, setClaiming] = useState(false);
@@ -74,20 +77,35 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
       .limit(4);
     setRelatedListings(related || []);
 
-    const { data: reviewData } = await supabase
-      .from('reviews')
-      .select('*')
-      .eq('boutique_id', (listingData as Listing).boutique_id)
-      .order('created_at', { ascending: false })
-      .limit(3);
-    setReviews((reviewData as Review[]) || []);
-
     setLoading(false);
   }, [listingId]);
 
   useEffect(() => {
     loadListing();
   }, [loadListing]);
+
+  useEffect(() => {
+    const currentUserId = user?.id;
+    if (!currentUserId || !listingId) {
+      setUserOrderForListing(null);
+      return;
+    }
+
+    async function loadUserOrder() {
+      const { data } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('buyer_id', currentUserId)
+        .eq('listing_id', listingId)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      const latestOrder = (data as Order[] | null)?.[0] ?? null;
+      setUserOrderForListing(latestOrder);
+    }
+
+    loadUserOrder();
+  }, [listingId, user]);
 
   // Countdown timer for English auctions
   useEffect(() => {
@@ -174,9 +192,11 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
     : (listing.images || []).map((url, i) => ({ url, angle: i === 0 ? 'front' : 'other', is_flaw: false } as ImageMetadata));
 
   const flawImages = allImages.filter((img) => img.is_flaw || img.angle === 'flaw');
-  const angleImages = allImages.filter((img) => !img.is_flaw && img.angle !== 'flaw');
 
   const displayPrice: number = isDutch && dutchPrice !== null ? dutchPrice : (isDutch ? Number(listing.current_dutch_price ?? listing.auction_start_price ?? listing.price) : Number(listing.price));
+  const fraudReportEligible = Boolean(
+    userOrderForListing && ['escrow_held', 'in_escrow', 'shipped', 'delivered'].includes(userOrderForListing.status),
+  );
 
   async function handleBid(e: React.FormEvent) {
     e.preventDefault();
@@ -576,6 +596,33 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
             <p className="text-sm text-ink-600 leading-relaxed">{listing.description}</p>
           </div>
 
+          <div className="mb-5 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setReportCategory('illegal_item');
+                setShowReportModal(true);
+              }}
+              className="btn-secondary text-xs px-3 py-2"
+            >
+              Report Listing
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!fraudReportEligible) {
+                  setReportCategory('product_fraud');
+                }
+                setReportCategory('product_fraud');
+                setShowReportModal(true);
+              }}
+              disabled={!fraudReportEligible}
+              className="btn-terracotta text-xs px-3 py-2 disabled:opacity-40"
+            >
+              {fraudReportEligible ? 'Report Product Fraud' : 'Fraud Report Disabled'}
+            </button>
+          </div>
+
           {/* Specs */}
           <div className="card p-4 mb-5">
             <h3 className="text-sm font-medium text-ink-900 mb-3">Item Details</h3>
@@ -656,6 +703,17 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
           </div>
         </div>
       )}
+
+      <ReportSubmissionModal
+        open={showReportModal}
+        onClose={() => setShowReportModal(false)}
+        listingId={listing.id}
+        sellerId={boutique?.seller_id ?? listing.boutique_id}
+        orderId={userOrderForListing?.id ?? null}
+        defaultCategory={reportCategory}
+        title={reportCategory === 'product_fraud' ? 'Report Product Fraud' : 'Report Prohibited / Illegal Listing'}
+        fraudEligible={fraudReportEligible}
+      />
     </div>
   );
 }

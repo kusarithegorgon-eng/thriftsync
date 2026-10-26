@@ -1,15 +1,19 @@
 import { useEffect, useState } from 'react';
-import { MapPin, Star, ArrowLeft, Package, Shield, Clock } from 'lucide-react';
+import { MapPin, Star, Package, Shield, Clock } from 'lucide-react';
 import { useRouter } from '@/lib/router';
+import { useAuth } from '@/lib/auth';
 import { supabase, type Boutique, type Listing, type Review } from '@/lib/supabase';
 import { ListingCard, ListingCardSkeleton } from '@/components/ListingCard';
+import { ReportSubmissionModal } from '@/components/ReportSubmissionModal';
 
 export function BoutiquePage({ slug }: { slug: string }) {
   const { navigate } = useRouter();
+  const { user } = useAuth();
   const [boutique, setBoutique] = useState<Boutique | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showReportModal, setShowReportModal] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -127,6 +131,15 @@ export function BoutiquePage({ slug }: { slug: string }) {
           <div className="flex items-center gap-1.5 px-3 py-1.5 bg-ink-50 text-ink-600 rounded-lg text-xs font-medium">
             <Clock className="w-3.5 h-3.5" /> Joined {new Date(boutique.created_at).getFullYear()}
           </div>
+          {user && (
+            <button
+              type="button"
+              onClick={() => setShowReportModal(true)}
+              className="btn-secondary text-xs px-3 py-1.5"
+            >
+              Report Seller
+            </button>
+          )}
         </div>
 
         {/* Policies */}
@@ -172,6 +185,19 @@ export function BoutiquePage({ slug }: { slug: string }) {
           </div>
         )}
       </div>
+
+      {boutique && (
+        <ReportSubmissionModal
+          open={showReportModal}
+          onClose={() => setShowReportModal(false)}
+          listingId={null}
+          sellerId={boutique.seller_id}
+          orderId={null}
+          defaultCategory="illegal_item"
+          title="Report Seller"
+          fraudEligible={false}
+        />
+      )}
     </div>
   );
 }
