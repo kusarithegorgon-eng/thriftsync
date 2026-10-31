@@ -7,6 +7,9 @@ verify_jwt = true
 [functions.thrift-crawl]
 verify_jwt = true
 
+[functions.paymongo-checkout]
+verify_jwt = true
+
 [auth.email]
 enable_signup = true
 enable_confirmations = true

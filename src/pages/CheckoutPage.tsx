@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Shield, Check, ArrowLeft, Leaf, Truck, Tag, X, AlertCircle, MapPin, Package, Navigation, Lock } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
@@ -6,6 +6,12 @@ import { useCart } from '@/lib/cart';
 import { supabase, type Voucher, type Boutique, type LockerLocation } from '@/lib/supabase';
 import { formatPrice, CEBU_BARANGAYS, isWithinCebu, findNearestBarangay, haversineDistance, cn } from '@/lib/utils';
 import { CebuMap } from '@/components/CebuMap';
+import {
+  PAYMONGO_SESSION_KEY,
+  confirmPaymongoCheckout,
+  createPaymongoCheckout,
+  isPaymongoTestMode,
+} from '@/lib/paymongo';
 
 type DeliveryMode = 'courier' | 'pickup' | 'locker';
 
@@ -32,6 +38,7 @@ export function CheckoutPage() {
   const [lockers, setLockers] = useState<LockerLocation[]>([]);
   const [selectedLockerId, setSelectedLockerId] = useState('');
   const [lockerLoadError, setLockerLoadError] = useState<string | null>(null);
+  const paymongoReturnHandled = useRef(false);
 
   const hasAuctionItems = items.some((i) => i.listing.listing_type === 'auction');
   const boutiqueIds = items.map((i) => i.listing.boutique_id).filter(Boolean) as string[];
@@ -71,6 +78,44 @@ export function CheckoutPage() {
     }
     void loadLockers();
   }, []);
+
+  useEffect(() => {
+    if (paymongoReturnHandled.current) return;
+    const query = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    const paymongoStatus = query.get('paymongo');
+    if (paymongoStatus === 'cancel') {
+      paymongoReturnHandled.current = true;
+      setCheckoutError('PayMongo checkout was cancelled. Your cart is unchanged.');
+      setStep('review');
+      return;
+    }
+    if (paymongoStatus !== 'success') return;
+    paymongoReturnHandled.current = true;
+    const stored = sessionStorage.getItem(PAYMONGO_SESSION_KEY);
+    let sessionId = '';
+    try {
+      sessionId = stored ? JSON.parse(stored).checkout_session_id : '';
+    } catch {
+      sessionId = '';
+    }
+    if (!sessionId) {
+      setCheckoutError('Payment returned, but the PayMongo session is missing. Open My Orders if you were charged.');
+      return;
+    }
+    setProcessing(true);
+    setCheckoutError(null);
+    void confirmPaymongoCheckout(sessionId)
+      .then(() => {
+        sessionStorage.removeItem(PAYMONGO_SESSION_KEY);
+        clearCart();
+        setStep('complete');
+      })
+      .catch((error: unknown) => {
+        setCheckoutError(error instanceof Error ? error.message : 'Unable to confirm PayMongo payment.');
+        setStep('review');
+      })
+      .finally(() => setProcessing(false));
+  }, [clearCart]);
 
   function handleBarangaySelect(selectedName: string) {
     setBarangay(selectedName);
@@ -193,29 +238,56 @@ export function CheckoutPage() {
         );
       }
 
-      const { error } = await supabase.rpc('checkout_fixed_items_with_fulfillment', {
-        p_shipping_address: fullAddress,
-        p_items: items.map(({ listing }) => ({
-          listing_id: listing.id,
-          amount: Number(listing.price),
-        })),
-        p_voucher_code: appliedVoucher?.code || null,
-        p_delivery_method: deliveryMode,
-        p_locker_location_id: deliveryMode === 'locker' ? selectedLockerId : null,
-      });
-      if (error) {
-        if (error.message.includes('One or more cart items are no longer available.')) {
-          throw new Error('A product became unavailable while you were checking out. Return to your cart, remove it, and try again.');
+      const orderItems = items.map(({ listing }) => ({
+        listing_id: listing.id,
+        amount: Number(listing.price),
+        title: listing.title,
+      }));
+
+      if (finalTotal <= 0) {
+        const { error } = await supabase.rpc('checkout_fixed_items_with_fulfillment', {
+          p_shipping_address: fullAddress,
+          p_items: orderItems.map(({ listing_id, amount }) => ({ listing_id, amount })),
+          p_voucher_code: appliedVoucher?.code || null,
+          p_delivery_method: deliveryMode,
+          p_locker_location_id: deliveryMode === 'locker' ? selectedLockerId : null,
+        });
+        if (error) {
+          if (error.message.includes('One or more cart items are no longer available.')) {
+            throw new Error('A product became unavailable while you were checking out. Return to your cart, remove it, and try again.');
+          }
+          throw new Error(error.message);
         }
-        throw new Error(error.message);
+        clearCart();
+        setStep('complete');
+        return;
       }
-      clearCart();
-      setStep('complete');
+
+      const returnBase = `${window.location.origin}${window.location.pathname || '/'}`;
+      const { checkout_url, checkout_session_id } = await createPaymongoCheckout({
+        items: orderItems,
+        shipping_address: fullAddress,
+        voucher_code: appliedVoucher?.code || null,
+        delivery_method: deliveryMode,
+        locker_location_id: deliveryMode === 'locker' ? selectedLockerId : null,
+        success_url: `${returnBase}#/checkout?paymongo=success`,
+        cancel_url: `${returnBase}#/checkout?paymongo=cancel`,
+      });
+      sessionStorage.setItem(PAYMONGO_SESSION_KEY, JSON.stringify({ checkout_session_id }));
+      window.location.assign(checkout_url);
     } catch (error) {
       setCheckoutError(error instanceof Error ? error.message : 'Unable to place your order.');
     } finally {
       setProcessing(false);
     }
+  }
+
+  if (processing && step !== 'complete' && items.length === 0) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 py-20 text-center">
+        <p className="text-ink-500">Confirming your PayMongo payment...</p>
+      </div>
+    );
   }
 
   if (items.length === 0 && step !== 'complete') {
@@ -600,14 +672,15 @@ export function CheckoutPage() {
               <div className="flex items-center gap-2 mb-4 p-3 bg-sage-50 rounded-lg">
                 <Shield className="w-5 h-5 text-sage-600 shrink-0" />
                 <p className="text-xs text-sage-800">
-                  Your payment of <strong>{formatPrice(finalTotal)}</strong> will be held in escrow and released to sellers only after you confirm delivery.
+                  You will pay <strong>{formatPrice(finalTotal)}</strong> on PayMongo
+                  {isPaymongoTestMode ? ' (test mode)' : ''}. The order is recorded as held until you confirm delivery.
                 </p>
               </div>
 
               <div className="flex gap-2">
                 <button onClick={() => setStep('shipping')} className="btn-secondary flex-1">Edit</button>
                 <button onClick={handlePlaceOrder} disabled={processing} className="btn-terracotta flex-1 py-3">
-                  {processing ? 'Processing...' : `Place Order — ${formatPrice(finalTotal)}`}
+                  {processing ? 'Redirecting to PayMongo...' : `Pay with PayMongo — ${formatPrice(finalTotal)}`}
                 </button>
               </div>
             </div>

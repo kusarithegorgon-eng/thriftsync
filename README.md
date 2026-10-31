@@ -20,18 +20,28 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
 2. Copy `.env.example` to `.env` and set `VITE_SUPABASE_URL` and
    `VITE_SUPABASE_ANON_KEY` from your Supabase project's API settings. The
    publishable/anon key is intended for frontend use; never put a service-role
-   key in the Vite environment. Set the three `VITE_EMAILJS_*` values for the
-   Contact Us form using a separate `VITE_EMAILJS_CONTACT_TEMPLATE_ID`.
-   Configure that EmailJS template with `name`, `email`,
-   `title`, and `message` variables, and set the recipient to your support
-   inbox rather than a value supplied by the form.
+   key in the Vite environment. Set `VITE_PAYMONGO_PUBLIC_KEY` for the client
+   and `PAYMONGO_SECRET_KEY` only on the server (never with a `VITE_` prefix).
+   This project uses Vite, so the public PayMongo key is `VITE_PAYMONGO_PUBLIC_KEY`,
+   not `NEXT_PUBLIC_PAYMONGO_PUBLIC_KEY`. Also set the three `VITE_EMAILJS_*`
+   values for the Contact Us form using a separate
+   `VITE_EMAILJS_CONTACT_TEMPLATE_ID`. Configure that EmailJS template with
+   `name`, `email`, `title`, and `message` variables, and set the recipient to
+   your support inbox rather than a value supplied by the form.
 3. In Supabase Dashboard, open Authentication settings and enable email
    confirmations. In the Confirm signup email template, include Supabase's
    `{{ .Token }}` value so users receive an eight-digit one-time code. The EmailJS template
    ID is separate from Supabase Auth and cannot verify accounts.
 4. Deploy the `auction-ops` Edge Function in `supabase/functions/auction-ops`
    and set its Supabase secrets as required by that function. Redeploy it after
-   updating the function source.
+   updating the function source. Deploy `supabase/functions/paymongo-checkout`
+   the same way, apply
+   [`paymongo_checkouts`](./supabase/migrations/20261031000000_add_paymongo_checkouts.sql),
+   and set the PayMongo secret with
+   `npx supabase secrets set PAYMONGO_SECRET_KEY=sk_test_...` so the secret never
+   ships in the Vite bundle. Checkout then redirects buyers to PayMongo Hosted
+   Checkout and only creates the marketplace order after PayMongo reports the
+   session as paid.
 5. Install Node.js 20 or later, run `npm install`, then run `npm run dev`.
    Open the local URL printed by Vite, usually `http://localhost:5173`.
 

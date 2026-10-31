@@ -165,11 +165,12 @@ function TermsOfUse() {
           Product listings are offers from individual sellers, not guarantees by ThriftSync.
           Ascending auctions use bids and descending auctions show a price that falls over time until
           claimed or the auction ends; auction rules and displayed timing apply to each listing.
-          Placing an order or seeing an “escrow” status in the interface does not mean ThriftSync has
-          received, held, or insured money. The current application does not process card payments or
-          provide a payment guarantee. Confirm payment, delivery, returns, and dispute arrangements
-          with the seller before transacting. Do not enter card numbers or banking credentials into
-          ThriftSync.
+          Checkout payments are processed by PayMongo. Card and e-wallet details are entered on
+          PayMongo’s hosted page, not in ThriftSync forms. Seeing an “escrow” status in the interface
+          means the order is recorded as unpaid-to-the-seller until you confirm delivery; it does not
+          mean ThriftSync is a licensed escrow agent or insurer. Test-mode PayMongo keys do not
+          capture live funds. Confirm delivery, returns, and dispute arrangements with the seller
+          after a successful payment.
         </p>
       </Section>
       <Section title="Content and service availability">
