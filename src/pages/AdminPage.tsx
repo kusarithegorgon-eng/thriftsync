@@ -3,10 +3,12 @@ import {
   ShieldCheck, CheckCircle2, XCircle, Clock, Search, Package, CheckSquare,
   ChevronRight, AlertCircle, Store, RefreshCw,
 } from 'lucide-react';
-import { supabase, type ListingWithBoutique, type Report } from '@/lib/supabase';
+import { supabase, type ListingWithBoutique, type Report, type GeneralReport } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { useRouter } from '@/lib/router';
 import { formatPrice, formatTimeAgo, cn } from '@/lib/utils';
+
+type GeneralReportWithEvidence = GeneralReport & { evidence_urls: string[] };
 
 export function AdminPage() {
   const { user, profile, loading: authLoading } = useAuth();
@@ -23,6 +25,8 @@ export function AdminPage() {
   const [rejectReason, setRejectReason] = useState('');
   const [selectedListing, setSelectedListing] = useState<ListingWithBoutique | null>(null);
   const [reports, setReports] = useState<Report[]>([]);
+  const [generalReports, setGeneralReports] = useState<GeneralReportWithEvidence[]>([]);
+  const [generalReportsError, setGeneralReportsError] = useState<string | null>(null);
 
   const loadListings = useCallback(async () => {
     setLoading(true);
@@ -62,10 +66,57 @@ export function AdminPage() {
         .order('created_at', { ascending: false })
         .limit(25)
         .then(({ data, error }) => {
-          if (!error) setReports((data as Report[]) || []);
+          if (error) {
+            setActionMessage({ id: 'report-load', text: error.message, success: false });
+            return;
+          }
+          const loadedReports = (data as Report[]) || [];
+          void Promise.all(loadedReports.map(async (report) => ({
+            ...report,
+            evidence_urls: await Promise.all(report.evidence_urls.map(async (path) => {
+              if (path.includes('://')) return path;
+              const { data: signed, error: signedError } = await supabase.storage
+                .from('report-evidence')
+                .createSignedUrl(path, 60 * 60);
+              if (signedError) {
+                console.error('Could not sign report evidence:', signedError);
+                return '';
+              }
+              return signed.signedUrl;
+            })),
+          }))).then(setReports);
         });
+      void loadGeneralReports();
     }
   }, [user, profile, loadListings]);
+
+  async function loadGeneralReports() {
+    const { data, error } = await supabase
+      .from('general_reports')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) {
+      setGeneralReportsError(error.message);
+      return;
+    }
+    const rows = (data as GeneralReport[]) || [];
+    const withEvidence = await Promise.all(rows.map(async (report) => {
+      const signedUrls = await Promise.all(report.evidence_paths.map(async (path) => {
+        const { data: signed, error: signedError } = await supabase.storage
+          .from('report-evidence')
+          .createSignedUrl(path, 60 * 60);
+        if (signedError) {
+          console.error('Could not sign general report evidence:', signedError);
+          return '';
+        }
+        return signed.signedUrl;
+      }));
+      return { ...report, evidence_urls: signedUrls };
+    }));
+    setGeneralReports(withEvidence);
+    setGeneralReportsError(null);
+  }
 
   async function approve(listingId: string) {
     setActionLoading(listingId);
@@ -126,6 +177,32 @@ export function AdminPage() {
       setActionMessage({ id: `report-${reportId}`, text: result?.message || 'Report updated.', success: result?.success ?? true });
     } catch (err) {
       setActionMessage({ id: `report-${reportId}`, text: err instanceof Error ? err.message : 'Report action failed.', success: false });
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function resolveGeneralReport(reportId: string, action: 'resolve' | 'dismiss') {
+    setActionLoading(`general-report-${reportId}`);
+    try {
+      const { data, error } = await supabase.rpc('resolve_general_report', {
+        p_report_id: reportId,
+        p_action: action,
+        p_admin_notes: action === 'resolve' ? 'Violation reviewed by moderation.' : 'Report dismissed by moderation.',
+      });
+      if (error) throw error;
+      const result = data?.[0];
+      if (!result?.success) throw new Error(result?.message || 'Report could not be updated.');
+      setGeneralReports((current) => current.map((report) => report.id === reportId
+        ? { ...report, status: action === 'resolve' ? 'resolved' : 'dismissed' }
+        : report));
+      setActionMessage({ id: `general-report-${reportId}`, text: result.message, success: true });
+    } catch (error) {
+      setActionMessage({
+        id: `general-report-${reportId}`,
+        text: error instanceof Error ? error.message : 'Report action failed.',
+        success: false,
+      });
     } finally {
       setActionLoading(null);
     }
@@ -461,9 +538,14 @@ export function AdminPage() {
       <div className="mt-10">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-serif text-2xl font-bold text-ink-900">Reports & Escalations</h2>
-          <span className="text-xs text-ink-500">{reports.length} total</span>
+          <span className="text-xs text-ink-500">{reports.length + generalReports.length} total</span>
         </div>
-        {reports.length === 0 ? (
+        {generalReportsError && (
+          <p role="alert" className="mb-3 rounded-lg bg-terracotta-50 p-3 text-sm text-terracotta-700">
+            Could not load general reports: {generalReportsError}
+          </p>
+        )}
+        {reports.length === 0 && generalReports.length === 0 ? (
           <div className="card p-6 text-sm text-ink-500">No informal reports have been submitted yet.</div>
         ) : (
           <div className="space-y-3">
@@ -517,12 +599,75 @@ export function AdminPage() {
                 )}
                 {report.evidence_urls.length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {report.evidence_urls.slice(0, 3).map((url, index) => (
+                    {report.evidence_urls.filter(Boolean).slice(0, 3).map((url, index) => (
                       <a key={`${report.id}-${index}`} href={url} target="_blank" rel="noreferrer" className="text-xs text-terracotta-600 underline break-all">
                         Evidence {index + 1}
                       </a>
                     ))}
                   </div>
+                )}
+              </div>
+            ))}
+            {generalReports.map((report) => (
+              <div key={`general-${report.id}`} className="card p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <div className="mb-1 flex items-center gap-2">
+                      <span className="badge bg-ink-100 text-ink-700">
+                        {{
+                          counterfeit_item: 'Counterfeit / Fake Designer',
+                          stolen_goods: 'Stolen / Prohibited Goods',
+                          misleading_location: 'False Location Tag',
+                          abusive_content: 'Abusive Content',
+                        }[report.violation_category]}
+                      </span>
+                      <span className={cn(
+                        'badge',
+                        report.status === 'pending' || report.status === 'under_review'
+                          ? 'bg-amber-100 text-amber-700'
+                          : report.status === 'resolved'
+                            ? 'bg-sage-100 text-sage-700'
+                            : 'bg-ink-100 text-ink-600',
+                      )}>{report.status.replace('_', ' ')}</span>
+                    </div>
+                    <p className="text-sm leading-relaxed text-ink-600">{report.description}</p>
+                    <p className="mt-2 text-[11px] text-ink-400">
+                      Listing: {report.listing_id || 'Seller profile'} · Evidence: {report.evidence_paths.length}
+                    </p>
+                  </div>
+                  {['pending', 'under_review'].includes(report.status) && (
+                    <div className="flex shrink-0 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void resolveGeneralReport(report.id, 'dismiss')}
+                        disabled={actionLoading === `general-report-${report.id}`}
+                        className="btn-secondary text-xs"
+                      >
+                        Dismiss
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void resolveGeneralReport(report.id, 'resolve')}
+                        disabled={actionLoading === `general-report-${report.id}`}
+                        className="btn-primary text-xs"
+                      >
+                        Resolve
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {report.admin_notes && <p className="mt-2 text-xs text-ink-500">Admin note: {report.admin_notes}</p>}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {report.evidence_urls.filter(Boolean).map((url, index) => (
+                    <a key={`${report.id}-${index}`} href={url} target="_blank" rel="noreferrer" className="text-xs text-terracotta-600 underline">
+                      Evidence {index + 1}
+                    </a>
+                  ))}
+                </div>
+                {actionMessage?.id === `general-report-${report.id}` && (
+                  <p role="status" className={cn('mt-2 text-xs', actionMessage.success ? 'text-sage-700' : 'text-terracotta-700')}>
+                    {actionMessage.text}
+                  </p>
                 )}
               </div>
             ))}

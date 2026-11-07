@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Package, Truck, CheckCircle, CheckCircle2, Clock, KeyRound } from 'lucide-react';
+import { Package, Truck, CheckCircle, CheckCircle2, Clock, KeyRound, Star } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { supabase, type Order, type Listing, type Boutique, type LockerHandoff, type LockerLocation } from '@/lib/supabase';
@@ -22,6 +22,10 @@ export function OrdersPage() {
   const [pinGeneratingOrderId, setPinGeneratingOrderId] = useState<string | null>(null);
   const [lockerHandoffs, setLockerHandoffs] = useState<Record<string, LockerHandoff>>({});
   const [lockerLocations, setLockerLocations] = useState<Record<string, LockerLocation>>({});
+  const [reviewedOrderIds, setReviewedOrderIds] = useState<string[]>([]);
+  const [reviewRatings, setReviewRatings] = useState<Record<string, { accuracy: number; communication: number; punctuality: number }>>({});
+  const [reviewBodies, setReviewBodies] = useState<Record<string, string>>({});
+  const [reviewSubmittingId, setReviewSubmittingId] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -43,6 +47,15 @@ export function OrdersPage() {
       setOrders((data as OrderWithDetails[]) || []);
       const orderIds = (data || []).map((order) => order.id);
       if (orderIds.length > 0) {
+        const { data: reviews, error: reviewsError } = await supabase
+          .from('seller_reviews')
+          .select('order_id')
+          .in('order_id', orderIds);
+        if (reviewsError) {
+          setLoadError(`Could not load your seller reviews: ${reviewsError.message}`);
+        } else {
+          setReviewedOrderIds((reviews || []).map((review) => review.order_id));
+        }
         const { data: handoffData, error: handoffError } = await supabase
           .from('locker_handoffs')
           .select('*')
@@ -91,6 +104,38 @@ export function OrdersPage() {
       }));
     } finally {
       setDeliveryActionId(null);
+    }
+  }
+
+  async function submitSellerReview(order: OrderWithDetails) {
+    const ratings = reviewRatings[order.id] || { accuracy: 5, communication: 5, punctuality: 5 };
+    setReviewSubmittingId(order.id);
+    setDeliveryErrors((current) => ({ ...current, [order.id]: '' }));
+    try {
+      if (order.status === 'delivered') {
+        const { data, error } = await supabase.rpc('complete_order', { p_order_id: order.id });
+        if (error) throw error;
+        const result = data?.[0];
+        if (!result?.success) throw new Error(result?.message || 'Could not complete the order.');
+      }
+
+      const { error } = await supabase.rpc('submit_seller_review', {
+        p_order_id: order.id,
+        p_accuracy_rating: ratings.accuracy,
+        p_communication_rating: ratings.communication,
+        p_punctuality_rating: ratings.punctuality,
+        p_body: reviewBodies[order.id]?.trim() || null,
+      });
+      if (error) throw error;
+      setReviewedOrderIds((current) => [...current, order.id]);
+      setOrders((current) => current.map((item) => item.id === order.id ? { ...item, status: 'completed' } : item));
+    } catch (error) {
+      setDeliveryErrors((current) => ({
+        ...current,
+        [order.id]: error instanceof Error ? error.message : 'Could not submit the seller review.',
+      }));
+    } finally {
+      setReviewSubmittingId(null);
     }
   }
 
@@ -359,6 +404,64 @@ export function OrdersPage() {
                     <CheckCircle2 className="w-4 h-4" />
                     {deliveryActionId === order.id ? 'Confirming…' : 'Confirm delivery'}
                   </button>
+                </div>
+              )}
+              {['delivered', 'completed'].includes(order.status) && (
+                <div className="mt-4 border-t border-ink-100 pt-4">
+                  {reviewedOrderIds.includes(order.id) ? (
+                    <p className="inline-flex items-center gap-1 text-xs text-sage-700">
+                      <CheckCircle2 className="h-4 w-4" /> Seller feedback submitted for this completed order.
+                    </p>
+                  ) : (
+                    <form
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void submitSellerReview(order);
+                      }}
+                      className="space-y-3"
+                    >
+                      <div>
+                        <h3 className="text-sm font-medium text-ink-900">Rate your seller</h3>
+                        <p className="text-xs text-ink-500">Verified completed orders only. Your ratings help the Cebu vintage community.</p>
+                      </div>
+                      {([
+                        ['accuracy', 'Item accuracy & authenticity'],
+                        ['communication', 'Communication speed'],
+                        ['punctuality', 'Locker drop-off punctuality'],
+                      ] as const).map(([key, label]) => (
+                        <div key={key} className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs text-ink-600">{label}</span>
+                          <div className="flex" role="group" aria-label={label}>
+                            {[1, 2, 3, 4, 5].map((rating) => (
+                              <button
+                                key={rating}
+                                type="button"
+                                onClick={() => setReviewRatings((current) => ({
+                                  ...current,
+                                  [order.id]: { ...(current[order.id] || { accuracy: 5, communication: 5, punctuality: 5 }), [key]: rating },
+                                }))}
+                                aria-label={`${rating} stars for ${label}`}
+                                className="p-0.5"
+                              >
+                                <Star className={`h-4 w-4 ${rating <= (reviewRatings[order.id]?.[key] || 5) ? 'fill-gold-500 text-gold-500' : 'text-ink-200'}`} />
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                      <textarea
+                        value={reviewBodies[order.id] || ''}
+                        onChange={(event) => setReviewBodies((current) => ({ ...current, [order.id]: event.target.value }))}
+                        maxLength={2000}
+                        placeholder="Optional feedback about your order"
+                        className="input-field min-h-[72px] resize-y text-sm"
+                      />
+                      {deliveryErrors[order.id] && <p role="alert" className="text-xs text-terracotta-600">{deliveryErrors[order.id]}</p>}
+                      <button type="submit" disabled={reviewSubmittingId === order.id} className="btn-primary text-xs">
+                        {reviewSubmittingId === order.id ? 'Submitting…' : 'Complete order & submit review'}
+                      </button>
+                    </form>
+                  )}
                 </div>
               )}
             </div>

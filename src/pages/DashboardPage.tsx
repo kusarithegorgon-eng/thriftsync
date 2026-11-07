@@ -4,6 +4,7 @@ import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { supabase, type Listing, type Boutique, type Order } from '@/lib/supabase';
 import { formatPrice, formatTimeAgo, cn } from '@/lib/utils';
+import { SellerLiveAuctionBiddersModal } from '@/components/SellerLiveAuctionBiddersModal';
 
 type SellerOrder = Order & { listings: Pick<Listing, 'title'> | null };
 
@@ -18,6 +19,7 @@ export function DashboardPage() {
   const [lockerPins, setLockerPins] = useState<Record<string, string>>({});
   const [orderActionLoading, setOrderActionLoading] = useState<string | null>(null);
   const [orderActionErrors, setOrderActionErrors] = useState<Record<string, string>>({});
+  const [selectedAuction, setSelectedAuction] = useState<Listing | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -236,6 +238,16 @@ export function DashboardPage() {
                       <p className="text-sm font-semibold text-ink-900">{formatPrice(Number(listing.price))}</p>
                       {listing.status === 'active' && (
                         <div className="flex items-center gap-1">
+                          {listing.listing_type === 'auction' && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedAuction(listing)}
+                              aria-label={`View live bidders for ${listing.title}`}
+                              className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-medium text-terracotta-700 hover:bg-terracotta-50"
+                            >
+                              <Gavel className="h-3 w-3" /> Live bidders
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => shareListing(listing, 'facebook')}
@@ -384,6 +396,14 @@ export function DashboardPage() {
           </div>
         </div>
       </div>
+      {selectedAuction && (
+        <SellerLiveAuctionBiddersModal
+          open={Boolean(selectedAuction)}
+          listingId={selectedAuction.id}
+          listingTitle={selectedAuction.title}
+          onClose={() => setSelectedAuction(null)}
+        />
+      )}
     </div>
   );
 }

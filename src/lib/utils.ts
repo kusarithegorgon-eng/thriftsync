@@ -1,3 +1,5 @@
+import type { ItineraryStop, TransportMode, RouteSegment, OptimizedRoute } from '@/lib/supabase';
+
 export function formatPrice(amount: number): string {
   return new Intl.NumberFormat('en-PH', {
     style: 'currency',
@@ -305,17 +307,17 @@ export function findDistrict(lat: number, lng: number): { name: string; city: st
 // ROUTE OPTIMIZATION (Nearest-Neighbor Greedy Algorithm)
 // ============================================================
 
-import type { ItineraryStop, TransportMode, RouteSegment, OptimizedRoute } from '@/lib/supabase';
-
 const TRANSPORT_SPEEDS: Record<TransportMode, number> = {
   walking: 5,
   driving: 25,
+  motorbike: 25,
   jeepney: 15,
 };
 
 const TRANSFER_OVERHEAD: Record<TransportMode, number> = {
   walking: 0,
   driving: 3,
+  motorbike: 3,
   jeepney: 8,
 };
 
@@ -423,6 +425,75 @@ export function formatDuration(minutes: number): string {
   const mins = Math.round(minutes % 60);
   if (mins === 0) return `${hours} hr`;
   return `${hours} hr ${mins} min`;
+}
+
+export type CrawlArrival = {
+  boutiqueId: string;
+  boutiqueName: string;
+  arrivalAt: Date;
+  hoursLabel: string;
+  closingAlert: string | null;
+};
+
+export function estimateCrawlArrivals(
+  stops: ItineraryStop[],
+  segments: RouteSegment[],
+  departureAt: string,
+): CrawlArrival[] {
+  const departure = new Date(departureAt);
+  if (Number.isNaN(departure.getTime())) return [];
+
+  const hasStartingSegment = segments.length === stops.length;
+  const cebuDateFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  });
+  const dayKeys: Record<string, string> = {
+    Sun: 'sun', Mon: 'mon', Tue: 'tue', Wed: 'wed', Thu: 'thu', Fri: 'fri', Sat: 'sat',
+  };
+  let elapsedMinutes = 0;
+  return stops.map((stop, index) => {
+    const segmentIndex = hasStartingSegment ? index : index - 1;
+    if (segmentIndex >= 0) elapsedMinutes += segments[segmentIndex]?.time_minutes ?? 0;
+    const arrivalAt = new Date(departure.getTime() + elapsedMinutes * 60_000);
+    const parts = Object.fromEntries(cebuDateFormatter.formatToParts(arrivalAt).map((part) => [part.type, part.value]));
+    const hours = stop.operating_hours?.[dayKeys[parts.weekday]];
+    if (!hours) {
+      return { boutiqueId: stop.boutique_id, boutiqueName: stop.boutique_name, arrivalAt, hoursLabel: 'Hours not provided', closingAlert: null };
+    }
+    if (hours.toLowerCase() === 'closed') {
+      return { boutiqueId: stop.boutique_id, boutiqueName: stop.boutique_name, arrivalAt, hoursLabel: 'Closed that day', closingAlert: 'This boutique is closed when you arrive.' };
+    }
+
+    const match = hours.match(/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/);
+    if (!match) {
+      return { boutiqueId: stop.boutique_id, boutiqueName: stop.boutique_name, arrivalAt, hoursLabel: hours, closingAlert: null };
+    }
+
+    const [, openHour, openMinute, closeHour, closeMinute] = match;
+    const arrivalMinutes = Number(parts.hour) * 60 + Number(parts.minute);
+    const openMinutes = Number(openHour) * 60 + Number(openMinute);
+    const closeMinutes = Number(closeHour) * 60 + Number(closeMinute);
+    const timeLabel = (hour: string, minute: string) => new Date(2000, 0, 1, Number(hour), Number(minute))
+      .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+    return {
+      boutiqueId: stop.boutique_id,
+      boutiqueName: stop.boutique_name,
+      arrivalAt,
+      hoursLabel: `${timeLabel(openHour, openMinute)}–${timeLabel(closeHour, closeMinute)}`,
+      closingAlert: arrivalMinutes < openMinutes
+        ? `Opens at ${timeLabel(openHour, openMinute)}; you arrive before opening.`
+        : arrivalMinutes >= closeMinutes
+          ? `Closes at ${timeLabel(closeHour, closeMinute)}; you arrive after closing.`
+          : closeMinutes - arrivalMinutes <= 30
+            ? `Arriving shortly before the ${timeLabel(closeHour, closeMinute)} closing time.`
+            : null,
+    };
+  });
 }
 
 export function formatDistance(km: number): string {

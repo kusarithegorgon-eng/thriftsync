@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Gavel, Search, Heart, ShoppingBag, Menu, X, Store, User, LayoutDashboard, Package, Tag, MapPin, Lock, ShieldCheck } from 'lucide-react';
+import { Gavel, Search, Heart, ShoppingBag, Menu, X, Store, User, LayoutDashboard, Package, Tag, MapPin, Lock, ShieldCheck, MessageCircle } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { useCart } from '@/lib/cart';
@@ -125,6 +125,16 @@ export function Header() {
               >
                 <Package className={cn('w-5 h-5', isActive('orders') ? 'text-terracotta-600' : 'text-ink-700')} />
               </button>
+              {user && (
+                <button
+                  onClick={() => navigate({ name: 'messages' })}
+                  className="p-2 rounded-lg hover:bg-ink-100 transition-colors"
+                  aria-label="Messages"
+                  title="Messages"
+                >
+                  <MessageCircle className={cn('w-5 h-5', isActive('messages') ? 'text-terracotta-600' : 'text-ink-700')} />
+                </button>
+              )}
 
               {user ? (
                 <div className="relative">
@@ -153,6 +163,9 @@ export function Header() {
                       </MenuItem>
                       <MenuItem icon={<Package className="w-4 h-4" />} onClick={() => navigate({ name: 'orders' })}>
                         My Orders
+                      </MenuItem>
+                      <MenuItem icon={<MessageCircle className="w-4 h-4" />} onClick={() => navigate({ name: 'messages' })}>
+                        Messages
                       </MenuItem>
                       <MenuItem icon={<Tag className="w-4 h-4" />} onClick={() => navigate({ name: 'vouchers' })}>
                         Promo Codes

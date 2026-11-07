@@ -2,14 +2,15 @@ import { useEffect, useState, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import {
-  MapPin, Plus, X, Clock, Navigation, Car, PersonStanding, Bus,
-  Save, Route, Trash2, GripVertical, Store, ArrowRight, Calendar,
+  MapPin, Plus, X, Clock, Navigation, Car, PersonStanding, Bus, Bike,
+  Save, Route, Store, ArrowRight, Calendar, AlertTriangle,
 } from 'lucide-react';
-import { supabase, type Boutique, type ItineraryStop, type TransportMode, type Itinerary } from '@/lib/supabase';
+import { supabase, type Boutique, type ItineraryStop, type TransportMode, type ThriftCrawlRoute } from '@/lib/supabase';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import {
-  CEBU_CENTER, cn, optimizeRoute, formatDuration, formatDistance, haversineDistance,
+  CEBU_CENTER, cn, optimizeRoute, formatDuration, formatDistance, haversineDistance, estimateCrawlArrivals,
+  type CrawlArrival,
 } from '@/lib/utils';
 
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -20,6 +21,11 @@ L.Icon.Default.mergeOptions({
 });
 
 const STOP_COLORS = ['#b45309', '#0f766e', '#be123c', '#1d4ed8', '#7c3aed', '#c2410c'];
+
+function localDateTimeValue(date: Date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
 
 function FitBounds({ stops }: { stops: { lat: number; lng: number }[] }) {
   const map = useMap();
@@ -45,13 +51,20 @@ export function ThriftCrawlPage() {
   const [itineraryName, setItineraryName] = useState('');
   const [scheduledDate, setScheduledDate] = useState('');
   const [saving, setSaving] = useState(false);
-  const [savedItineraries, setSavedItineraries] = useState<Itinerary[]>([]);
+  const [savedItineraries, setSavedItineraries] = useState<ThriftCrawlRoute[]>([]);
   const [showSaved, setShowSaved] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [startLocation, setStartLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locating, setLocating] = useState(false);
   const [locationError, setLocationError] = useState('');
+  const [departureAt, setDepartureAt] = useState(() => localDateTimeValue(new Date()));
+  const [etaArrivals, setEtaArrivals] = useState<CrawlArrival[]>([]);
+  const [etaError, setEtaError] = useState<string | null>(null);
+  const [routePath, setRoutePath] = useState<[number, number][] | null>(null);
+  const [routeDistanceKm, setRouteDistanceKm] = useState<number | null>(null);
+  const [routeDurationMinutes, setRouteDurationMinutes] = useState<number | null>(null);
+  const [routeLoading, setRouteLoading] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -74,13 +87,13 @@ export function ThriftCrawlPage() {
   useEffect(() => {
     if (!user) return;
     supabase
-      .from('itineraries')
+      .from('thrift_crawl_routes')
       .select('*')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
       .limit(10)
       .then(({ data }) => {
-        if (data) setSavedItineraries(data as Itinerary[]);
+        if (data) setSavedItineraries(data as ThriftCrawlRoute[]);
       });
   }, [user]);
 
@@ -88,6 +101,92 @@ export function ThriftCrawlPage() {
     if (selectedStops.length === 0) return null;
     return optimizeRoute(selectedStops, transportMode, startLocation || undefined);
   }, [selectedStops, transportMode, startLocation]);
+
+  useEffect(() => {
+    if (!optimized || optimized.ordered_stops.length === 0) {
+      setEtaArrivals([]);
+      setEtaError(null);
+      setRoutePath(null);
+      setRouteDistanceKm(null);
+      setRouteDurationMinutes(null);
+      setRouteLoading(false);
+      return;
+    }
+
+    let active = true;
+    setEtaArrivals(estimateCrawlArrivals(optimized.ordered_stops, optimized.segments, departureAt));
+    setRoutePath(null);
+    setRouteDistanceKm(null);
+    setRouteDurationMinutes(null);
+    if (optimized.ordered_stops.length === 1 && !startLocation) {
+      setEtaError(null);
+      setRouteLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+    setRouteLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const { data, error } = await supabase.functions.invoke('thrift-crawl', {
+          body: {
+            action: 'estimate_eta',
+            stops: optimized.ordered_stops,
+            transport_mode: transportMode,
+            departure_at: new Date(departureAt).toISOString(),
+            start_location: startLocation,
+          },
+        });
+        if (!active) return;
+        if (error) {
+          setEtaError(`Street routing is unavailable; the map will not draw a straight-line route. Local estimates are approximate. ${error.message}`);
+          return;
+        }
+        if (
+          !Array.isArray(data?.arrivals)
+          || !Array.isArray(data?.route_coordinates)
+          || !data.route_coordinates.every((point: unknown) =>
+            Array.isArray(point)
+            && point.length === 2
+            && point.every((coordinate) => typeof coordinate === 'number' && Number.isFinite(coordinate))
+          )
+          || !Number.isFinite(data?.total_route_distance_km)
+          || !Number.isFinite(data?.estimated_total_time_minutes)
+        ) {
+          setEtaError('Street routing response is unavailable; the map will not draw a straight-line route. Local estimates are approximate.');
+          return;
+        }
+        setEtaArrivals(data.arrivals.map((arrival: {
+          boutique_id: string;
+          boutique_name: string;
+          arrival_at: string;
+          hours_label: string;
+          closing_alert: string | null;
+        }) => ({
+          boutiqueId: arrival.boutique_id,
+          boutiqueName: arrival.boutique_name,
+          arrivalAt: new Date(arrival.arrival_at),
+          hoursLabel: arrival.hours_label,
+          closingAlert: arrival.closing_alert,
+        })));
+        const coordinates = data.route_coordinates as [number, number][];
+        setRoutePath(coordinates.map(([lng, lat]) => [lat, lng]));
+        setRouteDistanceKm(data.total_route_distance_km);
+        setRouteDurationMinutes(data.estimated_total_time_minutes);
+        setEtaError(null);
+      } catch (error) {
+        if (active) {
+          setEtaError(`Street routing is unavailable; the map will not draw a straight-line route. Local estimates are approximate. ${error instanceof Error ? error.message : 'Request failed.'}`);
+        }
+      } finally {
+        if (active) setRouteLoading(false);
+      }
+    }, 250);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [departureAt, optimized, startLocation, transportMode]);
 
   const filteredBoutiques = useMemo(() => {
     if (!searchQuery) return boutiques;
@@ -111,6 +210,7 @@ export function ThriftCrawlPage() {
         boutique_name: boutique.name,
         lat: boutique.lat,
         lng: boutique.lng,
+        operating_hours: boutique.operating_hours || {},
       },
     ]);
     setShowSearch(false);
@@ -179,10 +279,11 @@ export function ThriftCrawlPage() {
         boutique_name: s.boutique_name,
         lat: s.lat,
         lng: s.lng,
+        operating_hours: s.operating_hours || {},
       }));
 
       const { data, error } = await supabase
-        .from('itineraries')
+        .from('thrift_crawl_routes')
         .insert({
           user_id: user.id,
           name: itineraryName,
@@ -191,14 +292,13 @@ export function ThriftCrawlPage() {
           total_distance_km: savedRoute.total_distance_km,
           total_time_minutes: savedRoute.total_time_minutes,
           scheduled_date: scheduledDate || null,
-          status: 'planned',
         })
         .select()
         .maybeSingle();
 
       if (error) throw error;
       if (data) {
-        setSavedItineraries([data as Itinerary, ...savedItineraries]);
+        setSavedItineraries([data as ThriftCrawlRoute, ...savedItineraries]);
         setShowSaved(true);
       }
     } catch (err) {
@@ -208,7 +308,7 @@ export function ThriftCrawlPage() {
     }
   }
 
-  function loadItinerary(it: Itinerary) {
+  function loadItinerary(it: ThriftCrawlRoute) {
     setSelectedStops(it.stops || []);
     setTransportMode(it.transport_mode);
     setItineraryName(it.name);
@@ -216,13 +316,9 @@ export function ThriftCrawlPage() {
     setShowSaved(false);
   }
 
-  const routePositions = optimized
-    ? [
-      ...(startLocation ? [[startLocation.lat, startLocation.lng] as [number, number]] : []),
-      ...optimized.ordered_stops.map((s) => [s.lat, s.lng] as [number, number]),
-    ]
-    : selectedStops.map((s) => [s.lat, s.lng] as [number, number]);
+  const routePositions = routePath || [];
   const displayedStops = optimized?.ordered_stops || selectedStops;
+  const arrivals = etaArrivals;
   const mapPoints = [
     ...selectedStops.map(({ lat: pointLat, lng: pointLng }) => ({ lat: pointLat, lng: pointLng })),
     ...(startLocation ? [startLocation] : []),
@@ -395,16 +491,50 @@ export function ThriftCrawlPage() {
                 </div>
                 <div>
                   <p className="text-xs text-ink-500 uppercase tracking-wide mb-1">Distance</p>
-                  <p className="text-2xl font-serif font-bold text-ink-900">{formatDistance(optimized.total_distance_km)}</p>
+                  <p className="text-2xl font-serif font-bold text-ink-900">{formatDistance(routeDistanceKm ?? optimized.total_distance_km)}</p>
                 </div>
                 <div>
                   <p className="text-xs text-ink-500 uppercase tracking-wide mb-1">Travel Time</p>
-                  <p className="text-2xl font-serif font-bold text-ink-900">{formatDuration(optimized.total_time_minutes)}</p>
+                  <p className="text-2xl font-serif font-bold text-ink-900">{formatDuration(routeDurationMinutes ?? optimized.total_time_minutes)}</p>
                 </div>
+              </div>
+              <div className="mt-4 border-t border-ink-100 pt-4">
+                <label className="flex flex-col gap-1 text-xs font-medium text-ink-700 sm:flex-row sm:items-center sm:justify-between">
+                  Departure time
+                  <input
+                    type="datetime-local"
+                    value={departureAt}
+                    onChange={(event) => setDepartureAt(event.target.value)}
+                    className="input-field max-w-xs text-sm"
+                  />
+                </label>
+                <div className="mt-3 space-y-2">
+                  {arrivals.map((arrival) => (
+                    <div key={arrival.boutiqueId} className="flex items-start justify-between gap-3 rounded-lg bg-ink-50 p-2.5">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-medium text-ink-900">{arrival.boutiqueName}</p>
+                        <p className="text-[10px] text-ink-500">
+                          Arrive {arrival.arrivalAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' })} · Hours {arrival.hoursLabel}
+                        </p>
+                      </div>
+                      {arrival.closingAlert && (
+                        <span className="flex max-w-[48%] items-start gap-1 text-[10px] text-terracotta-700">
+                          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                          {arrival.closingAlert}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {etaError && <p role="status" className="mt-2 text-[10px] text-amber-700">{etaError}</p>}
               </div>
               <div className="mt-3 pt-3 border-t border-ink-100">
                 <p className="text-xs text-ink-400 text-center">
-                  Estimated straight-line distances optimized for {transportMode} mode; real streets and traffic may differ.
+                  {routeLoading
+                    ? 'Finding a street route…'
+                    : routePath
+                      ? `Street route via OpenStreetMap for ${transportMode}. Travel times do not include live traffic; jeepney times are approximate.`
+                      : 'Street route unavailable; no straight-line route is shown. Local fallback distance and time estimates may be inaccurate.'}
                 </p>
                 {startLocation && firstStop && (
                   <p className="mt-2 text-xs text-ink-500 text-center">
@@ -420,7 +550,7 @@ export function ThriftCrawlPage() {
                         >
                           Get directions there
                         </a>
-                        {' '}                        in Google Maps (which receives the two locations when opened).
+                        {' '}in Google Maps (which receives the two locations when opened).
                       </>
                     )}
                   </p>
@@ -440,9 +570,10 @@ export function ThriftCrawlPage() {
           {/* Transport mode selector */}
           <div className="card p-4">
             <h3 className="text-sm font-medium text-ink-900 mb-3">Transport Mode</h3>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {([
                 { mode: 'driving' as const, icon: Car, label: 'Drive' },
+                { mode: 'motorbike' as const, icon: Bike, label: 'Motorbike' },
                 { mode: 'jeepney' as const, icon: Bus, label: 'Jeepney' },
                 { mode: 'walking' as const, icon: PersonStanding, label: 'Walk' },
               ]).map(({ mode, icon: Icon, label }) => (
@@ -496,7 +627,7 @@ export function ThriftCrawlPage() {
                       <p className="text-sm font-medium text-ink-900 truncate">{stop.boutique_name}</p>
                       {i < selectedStops.length - 1 && (
                         <p className="text-[10px] text-ink-400">
-                          {formatDistance(haversineDistance(stop.lat, stop.lng, selectedStops[i + 1].lat, selectedStops[i + 1].lng))} to next
+                          {formatDistance(haversineDistance(stop.lat, stop.lng, selectedStops[i + 1].lat, selectedStops[i + 1].lng))} direct distance to next
                         </p>
                       )}
                     </div>

@@ -19,7 +19,7 @@ export function WishlistPage() {
       }
       const { data } = await supabase
         .from('wishlists')
-        .select('listing_id, listings(*, boutiques(id, name, slug, logo_url))')
+        .select('listing_id, listings(*, boutiques(id, name, slug, logo_url, seller_id, seller_rating_avg, seller_rating_count))')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 

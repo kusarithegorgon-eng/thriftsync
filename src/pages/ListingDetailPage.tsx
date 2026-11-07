@@ -3,7 +3,7 @@ import { Gavel, Heart, BadgeCheck, Clock, MapPin, MessageCircle, Shield, Truck, 
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { useCart } from '@/lib/cart';
-import { supabase, type Listing, type Boutique, type Bid, type ListingWithBoutique, type ImageMetadata, type BidResult, type Order } from '@/lib/supabase';
+import { supabase, type Listing, type Boutique, type PublicBid, type ListingWithBoutique, type ImageMetadata, type BidResult, type Order, type ReportCategory } from '@/lib/supabase';
 import { formatPrice, formatPriceDetailed, formatCountdown, isAuctionActive, formatTimeAgo, cn, getMinNextBid, getIncrementTierLabel, computeDutchPrice, getNextDropTime } from '@/lib/utils';
 import { ListingCard } from '@/components/ListingCard';
 import { ReportSubmissionModal } from '@/components/ReportSubmissionModal';
@@ -15,7 +15,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
 
   const [listing, setListing] = useState<Listing | null>(null);
   const [boutique, setBoutique] = useState<Boutique | null>(null);
-  const [bids, setBids] = useState<Bid[]>([]);
+  const [bids, setBids] = useState<PublicBid[]>([]);
   const [relatedListings, setRelatedListings] = useState<ListingWithBoutique[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedImage, setSelectedImage] = useState(0);
@@ -24,10 +24,8 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
   const [bidSuccess, setBidSuccess] = useState(false);
   const [bidding, setBidding] = useState(false);
   const [timeLeft, setTimeLeft] = useState('');
-  const [showMessageForm, setShowMessageForm] = useState(false);
-  const [messageBody, setMessageBody] = useState('');
   const [showReportModal, setShowReportModal] = useState(false);
-  const [reportCategory, setReportCategory] = useState<'illegal_item' | 'product_fraud'>('illegal_item');
+  const [reportCategory, setReportCategory] = useState<ReportCategory>('stolen_goods');
   const [userOrderForListing, setUserOrderForListing] = useState<Order | null>(null);
   const [dutchPrice, setDutchPrice] = useState<number | null>(null);
   const [nextDropIn, setNextDropIn] = useState('');
@@ -62,15 +60,15 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
     setBoutique(boutiqueData as Boutique);
 
     const { data: bidsData } = await supabase
-      .from('bids')
+      .from('public_auction_bids')
       .select('*')
       .eq('listing_id', listingId)
       .order('amount', { ascending: false });
-    setBids((bidsData as Bid[]) || []);
+    setBids((bidsData as PublicBid[]) || []);
 
     const { data: related } = await supabase
       .from('listings')
-      .select('*, boutiques(id, name, slug, logo_url)')
+      .select('*, boutiques(id, name, slug, logo_url, seller_id, seller_rating_avg, seller_rating_count)')
       .eq('status', 'active')
       .neq('id', listingId)
       .or(`category.eq.${(listingData as Listing).category},era.eq.${(listingData as Listing).era}`)
@@ -237,11 +235,11 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
 
     // Reload bids
     const { data: newBids } = await supabase
-      .from('bids')
+      .from('public_auction_bids')
       .select('*')
       .eq('listing_id', listingId)
       .order('amount', { ascending: false });
-    setBids((newBids as Bid[]) || []);
+    setBids((newBids as PublicBid[]) || []);
     setBidding(false);
   }
 
@@ -296,19 +294,6 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
     }
     addToCart({ ...listing, boutiques: boutique ? { id: boutique.id, name: boutique.name, slug: boutique.slug, logo_url: boutique.logo_url } : null } as ListingWithBoutique);
     navigate({ name: 'cart' });
-  }
-
-  async function handleSendMessage(e: React.FormEvent) {
-    e.preventDefault();
-    if (!user || !boutique) return;
-    await supabase.from('messages').insert({
-      listing_id: listingId,
-      sender_id: user.id,
-      receiver_id: boutique.seller_id,
-      body: messageBody,
-    });
-    setMessageBody('');
-    setShowMessageForm(false);
   }
 
   return (
@@ -396,8 +381,8 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
               <div className="text-left">
                 <p className="text-sm font-medium text-ink-900 group-hover:text-terracotta-600 transition-colors">{boutique.name}</p>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-gold-600 font-medium">★ {Number(boutique.rating_avg).toFixed(1)}</span>
-                  <span className="text-xs text-ink-400">({boutique.rating_count} reviews)</span>
+                  <span className="text-xs text-gold-600 font-medium">★ {Number(boutique.seller_rating_avg).toFixed(1)}</span>
+                  <span className="text-xs text-ink-400">({boutique.seller_rating_count} verified reviews)</span>
                   {boutique.barangay && (
                     <span className="text-xs text-ink-400 flex items-center gap-0.5">
                       <MapPin className="w-3 h-3" />{boutique.barangay}, Cebu
@@ -610,9 +595,6 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
             <button
               type="button"
               onClick={() => {
-                if (!fraudReportEligible) {
-                  setReportCategory('product_fraud');
-                }
                 setReportCategory('product_fraud');
                 setShowReportModal(true);
               }}
@@ -638,30 +620,13 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
 
           {/* Message seller */}
           <div className="mb-5">
-            {showMessageForm ? (
-              <form onSubmit={handleSendMessage} className="card p-4 space-y-3 animate-slide-down">
-                <h3 className="text-sm font-medium text-ink-900">Ask about this item</h3>
-                <textarea
-                  value={messageBody}
-                  onChange={(e) => setMessageBody(e.target.value)}
-                  placeholder="Ask the seller a question about this item..."
-                  className="input-field min-h-[80px] resize-none"
-                  required
-                />
-                <div className="flex gap-2">
-                  <button type="submit" className="btn-primary">Send Message</button>
-                  <button type="button" onClick={() => setShowMessageForm(false)} className="btn-secondary">Cancel</button>
-                </div>
-              </form>
-            ) : (
-              <button
-                onClick={() => user ? setShowMessageForm(true) : navigate({ name: 'auth' })}
-                className="flex items-center gap-2 text-sm text-ink-600 hover:text-ink-900 transition-colors link-underline"
-              >
-                <MessageCircle className="w-4 h-4" />
-                Ask the seller a question
-              </button>
-            )}
+            <button
+              onClick={() => user ? navigate({ name: 'messages', listingId: listing.id }) : navigate({ name: 'auth' })}
+              className="flex items-center gap-2 text-sm text-ink-600 transition-colors hover:text-ink-900 link-underline"
+            >
+              <MessageCircle className="w-4 h-4" />
+              Message the seller securely
+            </button>
           </div>
         </div>
       </div>
@@ -682,7 +647,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-ink-900">
-                      {bid.is_winning ? 'Highest Bidder' : `Bidder #${i + 1}`}
+                      {bid.bidder_label}{bid.is_winning ? ' · Highest Bidder' : ''}
                     </p>
                     <p className="text-xs text-ink-400">{formatTimeAgo(bid.created_at)}</p>
                   </div>
@@ -708,10 +673,10 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
         open={showReportModal}
         onClose={() => setShowReportModal(false)}
         listingId={listing.id}
-        sellerId={boutique?.seller_id ?? listing.boutique_id}
+        sellerId={boutique?.seller_id ?? ''}
         orderId={userOrderForListing?.id ?? null}
         defaultCategory={reportCategory}
-        title={reportCategory === 'product_fraud' ? 'Report Product Fraud' : 'Report Prohibited / Illegal Listing'}
+        title={reportCategory === 'product_fraud' ? 'Report Product Fraud' : 'Report Listing'}
         fraudEligible={fraudReportEligible}
       />
     </div>

@@ -19,7 +19,9 @@ export type Boutique = {
   bio: string | null; banner_url: string | null; logo_url: string | null;
   location: string | null; lat: number | null; lng: number | null;
   barangay: string | null; pickup_available: boolean; courier_delivery: boolean;
-  policies: string | null; rating_avg: number; rating_count: number; created_at: string;
+  policies: string | null; rating_avg: number; rating_count: number;
+  operating_hours: Record<string, string>; seller_rating_avg: number;
+  seller_rating_count: number; created_at: string;
 };
 export type ImageAngle = 'front' | 'back' | 'left' | 'right' | 'detail' | 'flaw' | 'tag' | 'other';
 export type ImageMetadata = { url: string; angle: ImageAngle; is_flaw: boolean; caption?: string };
@@ -39,12 +41,23 @@ export type Listing = {
   sku: string | null; coa_verified: boolean; views: number; created_at: string;
 };
 export type Bid = { id: string; listing_id: string; bidder_id: string; amount: number; is_winning: boolean; created_at: string };
-export type ReportCategory = 'illegal_item' | 'product_fraud';
+export type PublicBid = { id: string; listing_id: string; bidder_label: string; amount: number; is_winning: boolean; created_at: string };
+export type SellerAuctionBid = {
+  id: string; listing_id: string; bidder_id: string; display_name: string; avatar_url: string | null;
+  profile_url: string; feedback_score: number | null; amount: number; is_winning: boolean; created_at: string;
+};
+export type ReportCategory = 'illegal_item' | 'counterfeit_item' | 'stolen_goods' | 'misleading_location' | 'abusive_content' | 'product_fraud';
 export type ReportStatus = 'pending' | 'under_review' | 'resolved_refunded' | 'resolved_dismissed';
 export type Report = {
   id: string; reporter_id: string; reported_user_id: string; listing_id: string | null; order_id: string | null;
   category: ReportCategory; description: string | null; evidence_urls: string[]; status: ReportStatus;
   admin_notes: string | null; created_at: string;
+};
+export type GeneralReportCategory = Exclude<ReportCategory, 'illegal_item' | 'product_fraud'>;
+export type GeneralReport = {
+  id: string; reporter_id: string; reported_user_id: string; listing_id: string | null;
+  violation_category: GeneralReportCategory; description: string; evidence_paths: string[];
+  status: 'pending' | 'under_review' | 'resolved' | 'dismissed'; admin_notes: string | null; created_at: string;
 };
 export type AdminAuditLog = {
   id: string; report_id: string | null; actor_id: string | null; action: string; details: Record<string, unknown> | null; created_at: string;
@@ -56,7 +69,7 @@ export type Order = {
   locker_location_id: string | null; created_at: string;
 };
 export type Review = { id: string; boutique_id: string; reviewer_id: string; rating: number; body: string | null; created_at: string };
-export type ListingWithBoutique = Listing & { boutiques: Pick<Boutique, 'id' | 'name' | 'slug' | 'logo_url'> | null };
+export type ListingWithBoutique = Listing & { boutiques: Pick<Boutique, 'id' | 'name' | 'slug' | 'logo_url' | 'seller_id' | 'seller_rating_avg' | 'seller_rating_count'> | null };
 export type BoutiqueWithListings = Boutique & { listings: Listing[] };
 export type TradeStatus = 'PENDING' | 'COUNTERED' | 'ACCEPTED' | 'REJECTED' | 'SHIPPED_BY_PARTY_A' | 'SHIPPED_BY_PARTY_B' | 'COMPLETED' | 'DISPUTED';
 export type TradeOffer = { id: string; initiator_id: string; recipient_id: string; status: TradeStatus; cash_top_up: number; expires_at: string; accepted_at: string | null; completed_at: string | null; created_at: string; updated_at: string };
@@ -75,9 +88,26 @@ export type CebuBarangay = { id: string; name: string; city_municipality: string
 export type GeofenceResult = { within_cebu: boolean; nearest_barangay: CebuBarangay | null; message: string };
 export type BidResult = { success: boolean; min_next_bid: number | null; message: string; new_current_bid: number | null };
 export type CebuDistrict = { id: string; name: string; city_municipality: string; center_lat: number; center_lng: number; radius_km: number; is_metro: boolean };
-export type TransportMode = 'walking' | 'driving' | 'jeepney';
-export type ItineraryStop = { boutique_id: string; stop_order: number; boutique_name: string; lat: number; lng: number };
+export type TransportMode = 'walking' | 'driving' | 'motorbike' | 'jeepney';
+export type ItineraryStop = {
+  boutique_id: string; stop_order: number; boutique_name: string; lat: number; lng: number;
+  operating_hours?: Record<string, string>;
+};
 export type Itinerary = { id: string; user_id: string; name: string; stops: ItineraryStop[]; transport_mode: TransportMode; total_distance_km: number; total_time_minutes: number; status: 'planned' | 'active' | 'completed'; scheduled_date: string | null; created_at: string };
+export type ThriftCrawlRoute = Omit<Itinerary, 'status'>;
+export type Conversation = {
+  id: string; listing_id: string; buyer_id: string; seller_id: string;
+  created_at: string; updated_at: string;
+};
+export type Message = {
+  id: string; conversation_id: string | null; listing_id: string;
+  sender_id: string; receiver_id: string; body: string; created_at: string;
+};
+export type SellerReview = {
+  id: string; order_id: string; seller_id: string; reviewer_id: string;
+  accuracy_rating: number; communication_rating: number; punctuality_rating: number;
+  body: string | null; created_at: string;
+};
 export type LockerLocation = { id: string; partner_name: string; address: string; barangay: string | null; city_municipality: string; lat: number; lng: number; district_id: string | null; operating_hours: Record<string, string>; capacity_total: number; capacity_available: number; is_active: boolean; contact_phone: string | null; created_at: string };
 export type LockerHandoff = { id: string; locker_location_id: string; order_id: string | null; user_id: string; pin_code: string; status: string; drop_off_window_start: string | null; drop_off_window_end: string | null; dropped_off_at: string | null; picked_up_at: string | null; created_at: string };
 export type HandoffPinResult = { handoff_id: string; pin_code: string; locker_name: string; expires_at: string };

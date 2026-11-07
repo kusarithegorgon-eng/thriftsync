@@ -20,6 +20,8 @@ import { LockerNetworkPage } from '@/pages/LockerNetworkPage';
 import { AdminPage } from '@/pages/AdminPage';
 import { LegalPage } from '@/pages/LegalPage';
 import { ContactPage } from '@/pages/ContactPage';
+import { MessagesPage } from '@/pages/MessagesPage';
+import { ProfilePage } from '@/pages/ProfilePage';
 import { CookieNotice } from '@/components/CookieNotice';
 
 function RouteRenderer() {
@@ -54,6 +56,10 @@ function RouteRenderer() {
       return <VouchersPage />;
     case 'thrift-crawl':
       return <ThriftCrawlPage />;
+    case 'messages':
+      return <MessagesPage listingId={route.listingId} conversationId={route.conversationId} />;
+    case 'profile':
+      return <ProfilePage profileId={route.id} />;
     case 'lockers':
       return <LockerNetworkPage />;
     case 'admin':

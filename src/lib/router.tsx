@@ -15,6 +15,8 @@ export type Route =
   | { name: 'contact' }
   | { name: 'vouchers' }
   | { name: 'thrift-crawl' }
+  | { name: 'messages'; listingId?: string; conversationId?: string }
+  | { name: 'profile'; id: string }
   | { name: 'lockers' }
   | { name: 'admin' }
   | { name: 'legal'; document: 'privacy' | 'terms' | 'cookies' };
@@ -69,6 +71,14 @@ export function RouterProvider({ children }: { children: ReactNode }) {
       setRoute({ name: 'vouchers' });
     } else if (parts[0] === 'thrift-crawl') {
       setRoute({ name: 'thrift-crawl' });
+    } else if (parts[0] === 'messages') {
+      setRoute({
+        name: 'messages',
+        listingId: params.get('listing') || undefined,
+        conversationId: params.get('conversation') || undefined,
+      });
+    } else if (parts[0] === 'profile' && parts[1]) {
+      setRoute({ name: 'profile', id: parts[1] });
     } else if (parts[0] === 'lockers') {
       setRoute({ name: 'lockers' });
     } else if (parts[0] === 'admin') {
@@ -95,6 +105,14 @@ export function RouterProvider({ children }: { children: ReactNode }) {
       hash = `#/boutique/${newRoute.slug}`;
     } else if (newRoute.name === 'legal') {
       hash = `#/${newRoute.document}`;
+    } else if (newRoute.name === 'messages') {
+      const params = new URLSearchParams();
+      if (newRoute.listingId) params.set('listing', newRoute.listingId);
+      if (newRoute.conversationId) params.set('conversation', newRoute.conversationId);
+      const query = params.toString();
+      hash = `#/messages${query ? `?${query}` : ''}`;
+    } else if (newRoute.name === 'profile') {
+      hash = `#/profile/${encodeURIComponent(newRoute.id)}`;
     } else if (newRoute.name !== 'home') {
       hash = `#/${newRoute.name}`;
     }

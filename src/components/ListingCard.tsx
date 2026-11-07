@@ -20,7 +20,7 @@ export function ListingCard({ listing }: { listing: ListingWithBoutique }) {
   useEffect(() => {
     if (isAuction && !isDutch) {
       supabase
-        .from('bids')
+        .from('public_auction_bids')
         .select('amount')
         .eq('listing_id', listing.id)
         .order('amount', { ascending: false })
@@ -141,7 +141,14 @@ export function ListingCard({ listing }: { listing: ListingWithBoutique }) {
       {/* Info */}
       <div className="space-y-1">
         {listing.boutiques && (
-          <p className="text-xs text-ink-500 truncate">{listing.boutiques.name}</p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="truncate text-xs text-ink-500">{listing.boutiques.name}</p>
+            {listing.boutiques.seller_rating_count > 0 && (
+              <span className="shrink-0 text-[10px] font-medium text-gold-700">
+                ★ {Number(listing.boutiques.seller_rating_avg).toFixed(1)} ({listing.boutiques.seller_rating_count})
+              </span>
+            )}
+          </div>
         )}
         <h3 className="text-sm font-medium text-ink-900 leading-snug line-clamp-2 group-hover:text-terracotta-600 transition-colors">
           {listing.title}

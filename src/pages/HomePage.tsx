@@ -17,7 +17,7 @@ export function HomePage() {
       const [featuredRes, auctionRes, boutiqueRes] = await Promise.all([
         supabase
           .from('listings')
-          .select('*, boutiques(id, name, slug, logo_url)')
+          .select('*, boutiques(id, name, slug, logo_url, seller_id, seller_rating_avg, seller_rating_count)')
           .eq('status', 'active')
           .eq('moderation_status', 'approved')
           .eq('listing_type', 'fixed')
@@ -25,7 +25,7 @@ export function HomePage() {
           .limit(8),
         supabase
           .from('listings')
-          .select('*, boutiques(id, name, slug, logo_url)')
+          .select('*, boutiques(id, name, slug, logo_url, seller_id, seller_rating_avg, seller_rating_count)')
           .eq('status', 'active')
           .eq('moderation_status', 'approved')
           .eq('listing_type', 'auction')

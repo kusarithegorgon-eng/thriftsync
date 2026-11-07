@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { MapPin, Star, Package, Shield, Clock } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
-import { supabase, type Boutique, type Listing, type Review } from '@/lib/supabase';
+import { supabase, type Boutique, type Listing, type Review, type SellerReview } from '@/lib/supabase';
 import { ListingCard, ListingCardSkeleton } from '@/components/ListingCard';
 import { ReportSubmissionModal } from '@/components/ReportSubmissionModal';
 
@@ -12,6 +12,7 @@ export function BoutiquePage({ slug }: { slug: string }) {
   const [boutique, setBoutique] = useState<Boutique | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
+  const [sellerReviews, setSellerReviews] = useState<Pick<SellerReview, 'accuracy_rating' | 'communication_rating' | 'punctuality_rating'>[]>([]);
   const [loading, setLoading] = useState(true);
   const [showReportModal, setShowReportModal] = useState(false);
 
@@ -47,6 +48,13 @@ export function BoutiquePage({ slug }: { slug: string }) {
         .limit(5);
       setReviews((reviewData as Review[]) || []);
 
+      const { data: sellerReviewData, error: sellerReviewError } = await supabase
+        .from('seller_review_scores')
+        .select('accuracy_rating, communication_rating, punctuality_rating')
+        .eq('seller_id', (boutiqueData as Boutique).seller_id);
+      if (sellerReviewError) console.error('Seller reputation load error:', sellerReviewError);
+      setSellerReviews(sellerReviewData || []);
+
       setLoading(false);
     }
     load();
@@ -71,6 +79,12 @@ export function BoutiquePage({ slug }: { slug: string }) {
       </div>
     );
   }
+
+  const ratingAverage = (key: 'accuracy_rating' | 'communication_rating' | 'punctuality_rating') => (
+    sellerReviews.length > 0
+      ? sellerReviews.reduce((sum, review) => sum + review[key], 0) / sellerReviews.length
+      : 0
+  );
 
   return (
     <div className="animate-fade-in">
@@ -102,7 +116,7 @@ export function BoutiquePage({ slug }: { slug: string }) {
             <div className="flex flex-wrap items-center gap-3 mt-2 text-sm">
               <span className="flex items-center gap-1 text-gold-600 font-medium">
                 <Star className="w-4 h-4 fill-gold-500 text-gold-500" />
-                {Number(boutique.rating_avg).toFixed(1)} ({boutique.rating_count})
+                {Number(boutique.seller_rating_avg).toFixed(1)} ({boutique.seller_rating_count} verified)
               </span>
               {boutique.location && (
                 <span className="flex items-center gap-1 text-ink-500">
@@ -158,11 +172,26 @@ export function BoutiquePage({ slug }: { slug: string }) {
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
               {listings.map((listing) => (
-                <ListingCard key={listing.id} listing={{ ...listing, boutiques: { id: boutique.id, name: boutique.name, slug: boutique.slug, logo_url: boutique.logo_url } }} />
+                <ListingCard key={listing.id} listing={{ ...listing, boutiques: {
+                  id: boutique.id, name: boutique.name, slug: boutique.slug, logo_url: boutique.logo_url,
+                  seller_id: boutique.seller_id, seller_rating_avg: boutique.seller_rating_avg, seller_rating_count: boutique.seller_rating_count,
+                } }} />
               ))}
             </div>
           )}
         </div>
+
+        {sellerReviews.length > 0 && (
+          <section className="mt-10 card p-4">
+            <h2 className="font-serif text-xl font-bold text-ink-900">Verified Seller Reputation</h2>
+            <p className="mb-4 text-xs text-ink-500">Ratings from completed orders · {sellerReviews.length} review{sellerReviews.length === 1 ? '' : 's'}</p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <RatingBreakdown label="Item accuracy" value={ratingAverage('accuracy_rating')} />
+              <RatingBreakdown label="Communication speed" value={ratingAverage('communication_rating')} />
+              <RatingBreakdown label="Locker drop-off punctuality" value={ratingAverage('punctuality_rating')} />
+            </div>
+          </section>
+        )}
 
         {/* Reviews */}
         {reviews.length > 0 && (
@@ -198,6 +227,17 @@ export function BoutiquePage({ slug }: { slug: string }) {
           fraudEligible={false}
         />
       )}
+    </div>
+  );
+}
+
+function RatingBreakdown({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg bg-ink-50 p-3">
+      <p className="text-xs text-ink-500">{label}</p>
+      <p className="mt-1 flex items-center gap-1 text-sm font-semibold text-ink-900">
+        <Star className="h-4 w-4 fill-gold-500 text-gold-500" /> {value.toFixed(1)} / 5
+      </p>
     </div>
   );
 }

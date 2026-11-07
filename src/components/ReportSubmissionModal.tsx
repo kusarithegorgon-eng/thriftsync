@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, FileImage, ShieldAlert, X } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { supabase, type ReportCategory } from '@/lib/supabase';
@@ -25,7 +25,7 @@ export function ReportSubmissionModal({
   fraudEligible = false,
 }: ReportSubmissionModalProps) {
   const { user } = useAuth();
-  const [category, setCategory] = useState<ReportCategory>(defaultCategory);
+  const [category, setCategory] = useState<ReportCategory>(defaultCategory === 'illegal_item' ? 'stolen_goods' : defaultCategory);
   const [description, setDescription] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -37,10 +37,17 @@ export function ReportSubmissionModal({
     [fraudEligible, orderId, sellerId, user],
   );
 
+  useEffect(() => {
+    if (open) {
+      setCategory(defaultCategory === 'illegal_item' ? 'stolen_goods' : defaultCategory);
+      setResult(null);
+    }
+  }, [defaultCategory, open]);
+
   if (!open) return null;
 
   function resetForm() {
-    setCategory(defaultCategory);
+    setCategory(defaultCategory === 'illegal_item' ? 'stolen_goods' : defaultCategory);
     setDescription('');
     setFiles([]);
     setResult(null);
@@ -49,21 +56,6 @@ export function ReportSubmissionModal({
   function handleClose() {
     resetForm();
     onClose();
-  }
-
-  function buildSignedEvidenceUrls(selectedFiles: File[]) {
-    return selectedFiles.map((file, index) => {
-      const encodedName = encodeURIComponent(`${Date.now()}-${index}-${file.name}`);
-      const query = new URLSearchParams({
-        category,
-        listing_id: listingId ?? '',
-        order_id: orderId ?? '',
-        seller_id: sellerId,
-        file_name: file.name,
-      }).toString();
-
-      return `https://storage.thriftsync.app/signed-url/${encodedName}?${query}`;
-    });
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -83,41 +75,67 @@ export function ReportSubmissionModal({
     }
 
     if (files.length === 0) {
-      setResult({ success: false, message: 'Upload at least one photo or video clip to support this report.' });
+      setResult({ success: false, message: 'Upload at least one image to support this report.' });
+      return;
+    }
+    if (files.length > 5 || files.some((file) => !['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type) || file.size > 5 * 1024 * 1024)) {
+      setResult({ success: false, message: 'Upload up to five JPG, PNG, WebP, or GIF images, each no larger than 5 MB.' });
       return;
     }
 
     setSubmitting(true);
     setResult(null);
+    const uploadedPaths: string[] = [];
 
     try {
-      const evidenceUrls = buildSignedEvidenceUrls(files);
-      const { data, error } = await supabase.rpc('submit_report', {
-        p_reporter_id: user.id,
-        p_reported_user_id: sellerId,
-        p_listing_id: listingId ?? null,
-        p_order_id: orderId ?? null,
-        p_category: category,
-        p_description: description || null,
-        p_evidence_urls: evidenceUrls,
-      });
+      for (const file of files) {
+        const extension = file.type.split('/')[1].replace('jpeg', 'jpg');
+        const path = `${user.id}/${crypto.randomUUID()}.${extension}`;
+        const { error: uploadError } = await supabase.storage
+          .from('report-evidence')
+          .upload(path, file, { contentType: file.type, upsert: false });
+        if (uploadError) throw uploadError;
+        uploadedPaths.push(path);
+      }
 
-      if (error) throw error;
-
-      const response = data?.[0];
-      const successMessage = isFraudReport
-        ? 'Fraud report submitted successfully. Escrow has been frozen and an admin is reviewing the case.'
-        : 'Report submitted successfully. Our team will review the evidence and respond next.';
+      let successMessage: string;
+      if (isFraudReport) {
+        const { error } = await supabase.rpc('submit_product_fraud_report', {
+          p_reported_user_id: sellerId,
+          p_listing_id: listingId ?? null,
+          p_order_id: orderId ?? null,
+          p_description: description || null,
+          p_evidence_paths: uploadedPaths,
+        });
+        if (error) throw error;
+        successMessage = 'Fraud report submitted successfully. Escrow has been frozen and an admin is reviewing the case.';
+      } else if (category !== 'illegal_item') {
+        const { error } = await supabase.rpc('submit_general_report', {
+          p_reported_user_id: sellerId,
+          p_listing_id: listingId ?? null,
+          p_violation_category: category,
+          p_description: description,
+          p_evidence_paths: uploadedPaths,
+        });
+        if (error) throw error;
+        successMessage = 'Report submitted successfully. Our team will review the evidence and respond next.';
+      } else {
+        throw new Error('Choose a valid report category.');
+      }
 
       setResult({
         success: true,
-        message: response?.message || successMessage,
+        message: successMessage,
       });
 
       setDescription('');
       setFiles([]);
-      setCategory(defaultCategory);
+      setCategory(defaultCategory === 'illegal_item' ? 'stolen_goods' : defaultCategory);
     } catch (error) {
+      if (uploadedPaths.length > 0) {
+        const { error: cleanupError } = await supabase.storage.from('report-evidence').remove(uploadedPaths);
+        if (cleanupError) console.error('Report evidence cleanup failed:', cleanupError);
+      }
       const message = error instanceof Error ? error.message : 'Unable to submit report.';
       setResult({ success: false, message });
     } finally {
@@ -144,19 +162,32 @@ export function ReportSubmissionModal({
         </div>
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
-          <div className="grid sm:grid-cols-2 gap-3">
-            <button
-              type="button"
-              onClick={() => setCategory('illegal_item')}
-              className={category === 'illegal_item' ? 'border border-ink-900 bg-ink-900 text-white' : 'border border-ink-200 bg-white text-ink-700'}
-            >
-              Illegal / Stolen Item
-            </button>
+          <div>
+            <p className="mb-2 text-sm font-medium text-ink-900">Select a violation category *</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {([
+                ['counterfeit_item', 'Counterfeit / Fake Designer Vintage'],
+                ['stolen_goods', 'Stolen or Prohibited / Illegal Goods'],
+                ['misleading_location', 'Misleading / False Location Tag'],
+                ['abusive_content', 'Abusive or Inappropriate Content / Images'],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={category === value}
+                  onClick={() => setCategory(value)}
+                  className={`rounded-lg px-3 py-2 text-left text-sm ${category === value ? 'border border-ink-900 bg-ink-900 text-white' : 'border border-ink-200 bg-white text-ink-700'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               onClick={() => setCategory('product_fraud')}
               disabled={!canSubmitProductFraud}
-              className={category === 'product_fraud' ? 'border border-terracotta-600 bg-terracotta-50 text-terracotta-700' : 'border border-ink-200 bg-white text-ink-700 disabled:opacity-40'}
+              aria-pressed={category === 'product_fraud'}
+              className={`mt-2 w-full rounded-lg px-3 py-2 text-left text-sm ${category === 'product_fraud' ? 'border border-terracotta-600 bg-terracotta-50 text-terracotta-700' : 'border border-ink-200 bg-white text-ink-700 disabled:opacity-40'}`}
             >
               Product Fraud
             </button>
@@ -176,7 +207,7 @@ export function ReportSubmissionModal({
               placeholder={
                 isFraudReport
                   ? 'Describe the received item problem, missing authenticity, or misleading condition.'
-                  : 'Describe the prohibited, counterfeit, or suspicious item details.'
+                  : 'Describe the specific platform violation and where it appears.'
               }
               className="input-field min-h-[110px] resize-none"
               required
@@ -187,14 +218,17 @@ export function ReportSubmissionModal({
             <label className="block text-sm font-medium text-ink-900 mb-2">Evidence Upload</label>
             <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-ink-200 bg-white p-5 text-center hover:border-ink-400 transition-colors">
               <FileImage className="w-6 h-6 text-ink-400" />
-              <span className="text-sm font-medium text-ink-700">Add photos or video evidence</span>
-              <span className="text-xs text-ink-500">PNG, JPG, MP4, and other support files</span>
+              <span className="text-sm font-medium text-ink-700">Add image proof (required)</span>
+              <span className="text-xs text-ink-500">JPG, PNG, WebP, or GIF · up to five images, 5 MB each</span>
               <input
                 type="file"
                 multiple
-                accept="image/*,video/*"
+                accept="image/jpeg,image/png,image/webp,image/gif"
                 className="hidden"
-                onChange={(event) => setFiles(Array.from(event.target.files || []))}
+                onChange={(event) => {
+                  setFiles(Array.from(event.target.files || []));
+                  event.currentTarget.value = '';
+                }}
               />
             </label>
             {files.length > 0 && (

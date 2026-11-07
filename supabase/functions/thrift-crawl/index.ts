@@ -10,14 +10,38 @@ const corsHeaders = {
 const TRANSPORT_SPEEDS: Record<string, number> = {
   walking: 5,
   driving: 25,
+  motorbike: 25,
   jeepney: 15,
 };
 
 const TRANSFER_OVERHEAD: Record<string, number> = {
   walking: 0,
   driving: 3,
+  motorbike: 3,
   jeepney: 8,
 };
+
+type CrawlPoint = { lat: number; lng: number };
+type CrawlStop = CrawlPoint & {
+  boutique_id?: string;
+  boutique_name?: string;
+  operating_hours?: Record<string, string>;
+};
+
+function isCrawlPoint(value: unknown): value is CrawlPoint {
+  if (!value || typeof value !== "object") return false;
+  const point = value as Record<string, unknown>;
+  return typeof point.lat === "number" && Number.isFinite(point.lat)
+    && typeof point.lng === "number" && Number.isFinite(point.lng);
+}
+
+function isCrawlStop(value: unknown): value is CrawlStop {
+  if (!isCrawlPoint(value)) return false;
+  const stop = value as CrawlStop & { operating_hours?: unknown };
+  if (stop.operating_hours === undefined) return true;
+  if (!stop.operating_hours || typeof stop.operating_hours !== "object" || Array.isArray(stop.operating_hours)) return false;
+  return Object.values(stop.operating_hours).every((hours) => typeof hours === "string");
+}
 
 function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371;
@@ -65,8 +89,14 @@ Deno.serve(async (req: Request) => {
       }
 
       const mode = transport_mode || "driving";
-      const speed = TRANSPORT_SPEEDS[mode] || 25;
-      const overhead = TRANSFER_OVERHEAD[mode] || 3;
+      if (!Object.hasOwn(TRANSPORT_SPEEDS, mode)) {
+        return new Response(
+          JSON.stringify({ error: "transport_mode must be walking, driving, motorbike, or jeepney" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      const speed = TRANSPORT_SPEEDS[mode];
+      const overhead = TRANSFER_OVERHEAD[mode];
 
       // Nearest-neighbor greedy optimization
       const unvisited = [...stops];
@@ -119,6 +149,143 @@ Deno.serve(async (req: Request) => {
           segments,
           total_distance_km: totalDist,
           total_time_minutes: Math.round(totalTime),
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    // --- ESTIMATE CEBU CRAWL ARRIVALS ---
+    if (action === "estimate_eta") {
+      const stopsInput: unknown = body.stops;
+      const startLocationInput: unknown = body.start_location;
+      const mode = typeof body.transport_mode === "string" ? body.transport_mode : "driving";
+      const departure = new Date(body.departure_at);
+      if (!Array.isArray(stopsInput) || stopsInput.length === 0 || stopsInput.length > 20) {
+        return new Response(
+          JSON.stringify({ error: "Provide between one and twenty route stops" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      const stops = stopsInput.filter(isCrawlStop);
+      if (stops.length !== stopsInput.length) {
+        return new Response(
+          JSON.stringify({ error: "Every route stop must have valid coordinates and operating hours" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      if (startLocationInput !== undefined && startLocationInput !== null && !isCrawlPoint(startLocationInput)) {
+        return new Response(
+          JSON.stringify({ error: "start_location must contain valid coordinates" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      const startLocation = isCrawlPoint(startLocationInput) ? startLocationInput : null;
+      if (!Object.hasOwn(TRANSPORT_SPEEDS, mode) || Number.isNaN(departure.getTime())) {
+        return new Response(
+          JSON.stringify({ error: "A valid transport mode and departure_at timestamp are required" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      const points: CrawlPoint[] = startLocation ? [startLocation, ...stops] : stops;
+      if (points.some((point) =>
+        !Number.isFinite(point.lat) || !Number.isFinite(point.lng)
+        || point.lat < 9.25 || point.lat > 11 || point.lng < 123.2 || point.lng > 124.7
+      )) {
+        return new Response(
+          JSON.stringify({ error: "Route coordinates must be valid locations within Cebu" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      const routingProfile = mode === "walking" ? "routed-foot" : "routed-car";
+      const coordinates = points.map((point) => `${point.lng},${point.lat}`).join(";");
+      const routeResponse = await fetch(
+        `https://routing.openstreetmap.de/${routingProfile}/route/v1/driving/${coordinates}?overview=full&geometries=geojson&steps=false`,
+        { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(10000) },
+      );
+      if (!routeResponse.ok) {
+        return new Response(
+          JSON.stringify({ error: `Road routing service returned ${routeResponse.status}.` }),
+          { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      const routeResult = await routeResponse.json();
+      const route = routeResult.routes?.[0];
+      if (
+        routeResult.code !== "Ok"
+        || !Array.isArray(route?.geometry?.coordinates)
+        || !Array.isArray(route?.legs)
+        || route.legs.length !== Math.max(0, points.length - 1)
+      ) {
+        return new Response(
+          JSON.stringify({ error: "No walkable or drivable route was found between the selected locations." }),
+          { status: 422, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      const formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Manila",
+        weekday: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      });
+      const dayKeys: Record<string, string> = {
+        Sun: "sun", Mon: "mon", Tue: "tue", Wed: "wed", Thu: "thu", Fri: "fri", Sat: "sat",
+      };
+      let elapsedMinutes = 0;
+      let totalEstimatedMinutes = 0;
+      const legTimes = route.legs.map((leg: { distance: number; duration: number }) => {
+        const distanceKm = leg.distance / 1000;
+        const travelMinutes = mode === "jeepney"
+          ? (distanceKm / TRANSPORT_SPEEDS[mode]) * 60
+          : leg.duration / 60;
+        const minutes = travelMinutes + TRANSFER_OVERHEAD[mode];
+        totalEstimatedMinutes += minutes;
+        return minutes;
+      });
+      const arrivals = stops.map((stop, index) => {
+        if (index > 0 || startLocation) {
+          elapsedMinutes += legTimes[startLocation ? index : index - 1];
+        }
+        const arrival = new Date(departure.getTime() + elapsedMinutes * 60_000);
+        const parts: Record<string, string> = Object.fromEntries(formatter.formatToParts(arrival).map((part) => [part.type, part.value]));
+        const day = dayKeys[parts.weekday];
+        const hours = stop.operating_hours?.[day];
+        const arrivalMinutes = Number(parts.hour) * 60 + Number(parts.minute);
+        let closingAlert: string | null = null;
+        let hoursLabel = hours || "Hours not provided";
+        const hoursMatch = hours?.match(/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/);
+        if (hours?.toLowerCase() === "closed") {
+          hoursLabel = "Closed that day";
+          closingAlert = "This boutique is closed when you arrive.";
+        } else if (hoursMatch) {
+          const openMinutes = Number(hoursMatch[1]) * 60 + Number(hoursMatch[2]);
+          const closeMinutes = Number(hoursMatch[3]) * 60 + Number(hoursMatch[4]);
+          if (arrivalMinutes < openMinutes) closingAlert = `Opens at ${hoursMatch[1]}:${hoursMatch[2]}; you arrive before opening.`;
+          else if (arrivalMinutes >= closeMinutes) closingAlert = `Closes at ${hoursMatch[3]}:${hoursMatch[4]}; you arrive after closing.`;
+          else if (closeMinutes - arrivalMinutes <= 30) closingAlert = "Arriving shortly before closing.";
+          hoursLabel = hours;
+        }
+        return {
+          boutique_id: stop.boutique_id,
+          boutique_name: stop.boutique_name,
+          arrival_at: arrival.toISOString(),
+          local_arrival: formatter.format(arrival),
+          hours_label: hoursLabel,
+          closing_alert: closingAlert,
+        };
+      });
+
+      return new Response(
+        JSON.stringify({
+          arrivals,
+          estimated_total_time_minutes: Math.round(totalEstimatedMinutes),
+          total_route_distance_km: route.distance / 1000,
+          route_coordinates: route.geometry.coordinates,
+          route_provider: "OpenStreetMap",
+          traffic_included: false,
+          timezone: "Asia/Manila",
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );

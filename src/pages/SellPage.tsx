@@ -22,6 +22,26 @@ const ANGLE_OPTIONS: { value: ImageAngle; label: string; required: boolean }[] =
   { value: 'tag', label: 'Brand Tag', required: false },
 ];
 
+const STORE_HOUR_DAYS = [
+  { key: 'mon', label: 'Monday' },
+  { key: 'tue', label: 'Tuesday' },
+  { key: 'wed', label: 'Wednesday' },
+  { key: 'thu', label: 'Thursday' },
+  { key: 'fri', label: 'Friday' },
+  { key: 'sat', label: 'Saturday' },
+  { key: 'sun', label: 'Sunday' },
+];
+
+const DEFAULT_STORE_HOURS: Record<string, string> = {
+  mon: '10:00-20:00',
+  tue: '10:00-20:00',
+  wed: '10:00-20:00',
+  thu: '10:00-20:00',
+  fri: '10:00-20:00',
+  sat: '10:00-20:00',
+  sun: 'closed',
+};
+
 export function SellPage() {
   const { navigate } = useRouter();
   const { user, profile } = useAuth();
@@ -38,6 +58,10 @@ export function SellPage() {
   const [boutiquePickup, setBoutiquePickup] = useState(false);
   const [boutiqueCourier, setBoutiqueCourier] = useState(true);
   const [boutiquePolicies, setBoutiquePolicies] = useState('');
+  const [boutiqueOperatingHours, setBoutiqueOperatingHours] = useState<Record<string, string>>(DEFAULT_STORE_HOURS);
+  const [hoursSaving, setHoursSaving] = useState(false);
+  const [hoursError, setHoursError] = useState<string | null>(null);
+  const [hoursSaved, setHoursSaved] = useState(false);
 
   const [listingTitle, setListingTitle] = useState('');
   const [listingDesc, setListingDesc] = useState('');
@@ -74,7 +98,7 @@ export function SellPage() {
       }
       const { data, error: storeError } = await supabase
         .from('boutiques')
-        .select('id, name')
+        .select('id, name, operating_hours')
         .eq('seller_id', user.id)
         .order('created_at', { ascending: true })
         .limit(1)
@@ -85,6 +109,7 @@ export function SellPage() {
         setError(storeError.message);
       } else if (data) {
         setStore(data as Pick<Boutique, 'id' | 'name'>);
+        setBoutiqueOperatingHours((data.operating_hours as Record<string, string>) || {});
         setStep('listing');
       }
       setStoreLoading(false);
@@ -205,6 +230,7 @@ export function SellPage() {
         pickup_available: boutiquePickup,
         courier_delivery: boutiqueCourier,
         policies: boutiquePolicies,
+        operating_hours: boutiqueOperatingHours,
         rating_avg: 0,
         rating_count: 0,
       })
@@ -222,6 +248,23 @@ export function SellPage() {
       setStep('listing');
     }
     setSubmitting(false);
+  }
+
+  async function saveOperatingHours() {
+    if (!store) return;
+    setHoursSaving(true);
+    setHoursError(null);
+    setHoursSaved(false);
+    const { error: updateError } = await supabase
+      .from('boutiques')
+      .update({ operating_hours: boutiqueOperatingHours })
+      .eq('id', store.id);
+    if (updateError) {
+      setHoursError(updateError.message);
+    } else {
+      setHoursSaved(true);
+    }
+    setHoursSaving(false);
   }
 
   async function handleCreateListing(e: React.FormEvent) {
@@ -458,6 +501,24 @@ export function SellPage() {
               </label>
             </div>
 
+            <div className="rounded-xl border border-ink-200 p-4">
+              <h3 className="text-sm font-medium text-ink-900">Boutique operating hours</h3>
+              <p className="mb-3 text-xs text-ink-500">Set weekly hours so Thrift Crawl visitors can check their arrival time. Use 24-hour HH:MM-HH:MM or enter “closed”.</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {STORE_HOUR_DAYS.map(({ key, label }) => (
+                  <label key={key} className="flex items-center gap-2 text-xs text-ink-600">
+                    <span className="w-20">{label}</span>
+                    <input
+                      value={boutiqueOperatingHours[key] || ''}
+                      onChange={(event) => setBoutiqueOperatingHours((current) => ({ ...current, [key]: event.target.value }))}
+                      className="input-field py-2 text-xs"
+                      placeholder="10:00-20:00 or closed"
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+
             <div>
               <label className="text-xs font-medium text-ink-700 mb-1.5 block">Shop Policies</label>
               <textarea value={boutiquePolicies} onChange={(e) => setBoutiquePolicies(e.target.value)} className="input-field min-h-[60px] resize-none" placeholder="Return policy, pickup/delivery info, etc." />
@@ -474,6 +535,34 @@ export function SellPage() {
 
       {!storeLoading && step === 'listing' && (
         <div className="card p-6 animate-slide-down">
+          {store && (
+            <section className="mb-6 rounded-xl border border-ink-200 p-4">
+              <h2 className="text-sm font-medium text-ink-900">Boutique operating hours</h2>
+              <p className="mb-3 text-xs text-ink-500">Keep these current so Thrift Crawl itineraries can warn visitors about closing times.</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {STORE_HOUR_DAYS.map(({ key, label }) => (
+                  <label key={key} className="flex items-center gap-2 text-xs text-ink-600">
+                    <span className="w-20">{label}</span>
+                    <input
+                      value={boutiqueOperatingHours[key] || ''}
+                      onChange={(event) => {
+                        setHoursSaved(false);
+                        setBoutiqueOperatingHours((current) => ({ ...current, [key]: event.target.value }));
+                      }}
+                      className="input-field py-2 text-xs"
+                      placeholder="10:00-20:00 or closed"
+                    />
+                  </label>
+                ))}
+              </div>
+              <div className="mt-3 flex items-center justify-between gap-3">
+                {hoursError ? <p role="alert" className="text-xs text-terracotta-600">{hoursError}</p> : hoursSaved ? <p className="text-xs text-sage-700">Hours saved.</p> : <span />}
+                <button type="button" onClick={() => void saveOperatingHours()} disabled={hoursSaving} className="btn-secondary shrink-0 text-xs">
+                  {hoursSaving ? 'Saving…' : 'Save hours'}
+                </button>
+              </div>
+            </section>
+          )}
           <div className="mb-5">
             <h2 className="font-serif text-xl font-bold text-ink-900 mb-1">Add a Product</h2>
             <p className="text-sm text-ink-500">
