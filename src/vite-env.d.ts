@@ -7,6 +7,7 @@ interface ImportMetaEnv {
   readonly VITE_EMAILJS_CONTACT_TEMPLATE_ID?: string;
   readonly VITE_EMAILJS_PUBLIC_KEY?: string;
   readonly VITE_PAYMONGO_PUBLIC_KEY?: string;
+  readonly VITE_GCASH_SIMULATION_ENABLED?: string;
 }
 
 interface ImportMeta {

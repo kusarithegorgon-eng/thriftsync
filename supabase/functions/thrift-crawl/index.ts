@@ -28,6 +28,44 @@ type CrawlStop = CrawlPoint & {
   operating_hours?: Record<string, string>;
 };
 
+function decodeGooglePolyline(encoded: string): [number, number][] {
+  const coordinates: [number, number][] = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+
+  while (index < encoded.length) {
+    const deltas: number[] = [];
+    for (let coordinate = 0; coordinate < 2; coordinate += 1) {
+      let result = 0;
+      let shift = 0;
+      let chunk: number;
+      do {
+        if (index >= encoded.length || shift > 30) {
+          throw new Error("Google Routes returned an invalid polyline.");
+        }
+        chunk = encoded.charCodeAt(index++) - 63;
+        if (chunk < 0 || chunk > 63) {
+          throw new Error("Google Routes returned an invalid polyline.");
+        }
+        result |= (chunk & 0x1f) << shift;
+        shift += 5;
+      } while (chunk >= 0x20);
+      deltas.push((result & 1) ? ~(result >> 1) : result >> 1);
+    }
+    lat += deltas[0];
+    lng += deltas[1];
+    coordinates.push([lat / 1e5, lng / 1e5]);
+  }
+  return coordinates;
+}
+
+function googleDurationSeconds(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const match = /^(\d+(?:\.\d+)?)s$/.exec(value);
+  return match ? Number(match[1]) : null;
+}
+
 function isCrawlPoint(value: unknown): value is CrawlPoint {
   if (!value || typeof value !== "object") return false;
   const point = value as Record<string, unknown>;
@@ -197,6 +235,194 @@ Deno.serve(async (req: Request) => {
         );
       }
 
+      const googleRoutesApiKey = Deno.env.get("GOOGLE_MAPS_API_KEY");
+      if (googleRoutesApiKey) {
+        const origin = startLocation || stops[0];
+        const destination = stops[stops.length - 1];
+        const intermediateStops = startLocation
+          ? stops.slice(0, -1)
+          : stops.slice(1, -1);
+        const travelMode = mode === "walking"
+          ? "WALK"
+          : mode === "motorbike"
+            ? "TWO_WHEELER"
+            : "DRIVE";
+        const routeRequest: Record<string, unknown> = {
+          origin: { location: { latLng: { latitude: origin.lat, longitude: origin.lng } } },
+          destination: { location: { latLng: { latitude: destination.lat, longitude: destination.lng } } },
+          intermediates: intermediateStops.map((stop) => ({
+            location: { latLng: { latitude: stop.lat, longitude: stop.lng } },
+          })),
+          travelMode,
+        };
+        if (travelMode === "DRIVE" || travelMode === "TWO_WHEELER") {
+          routeRequest.routingPreference = "TRAFFIC_UNAWARE";
+        }
+        if (intermediateStops.length > 1) {
+          routeRequest.optimizeWaypointOrder = true;
+        }
+
+        let googleResponse: Response;
+        try {
+          googleResponse = await fetch(
+            "https://routes.googleapis.com/directions/v2:computeRoutes",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": googleRoutesApiKey,
+                "X-Goog-FieldMask": [
+                  "routes.duration",
+                  "routes.distanceMeters",
+                  "routes.polyline.encodedPolyline",
+                  "routes.legs.duration",
+                  "routes.legs.distanceMeters",
+                  "routes.optimizedIntermediateWaypointIndex",
+                ].join(","),
+              },
+              body: JSON.stringify(routeRequest),
+              signal: AbortSignal.timeout(15000),
+            },
+          );
+        } catch (error) {
+          return new Response(
+            JSON.stringify({
+              error: `Google Routes API request failed: ${error instanceof Error ? error.message : "network error"}`,
+            }),
+            { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+        const googleResult = await googleResponse.json();
+        if (!googleResponse.ok) {
+          const apiMessage = googleResult?.error?.message;
+          return new Response(
+            JSON.stringify({
+              error: typeof apiMessage === "string"
+                ? `Google Routes API returned ${googleResponse.status}: ${apiMessage}`
+                : `Google Routes API returned ${googleResponse.status}. Check the key, billing, and Routes API settings.`,
+            }),
+            { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+
+        const route = googleResult?.routes?.[0];
+        const legs = route?.legs;
+        const routeCoordinates = typeof route?.polyline?.encodedPolyline === "string"
+          ? decodeGooglePolyline(route.polyline.encodedPolyline)
+          : [];
+        const expectedLegCount = points.length - 1;
+        if (
+          !Array.isArray(legs) ||
+          legs.length !== expectedLegCount ||
+          routeCoordinates.length < 2 ||
+          !Number.isFinite(route.distanceMeters) ||
+          !legs.every((leg: { distanceMeters?: number; duration?: string }) =>
+            Number.isFinite(leg.distanceMeters) && googleDurationSeconds(leg.duration) !== null
+          )
+        ) {
+          return new Response(
+            JSON.stringify({ error: "Google Routes returned an incomplete route. Check the Routes API response field access." }),
+            { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+
+        let routedStops = [...stops];
+        if (intermediateStops.length > 1) {
+          const optimizedIndexes = route.optimizedIntermediateWaypointIndex;
+          if (
+            !Array.isArray(optimizedIndexes) ||
+            optimizedIndexes.length !== intermediateStops.length ||
+            optimizedIndexes.some((waypointIndex: number) =>
+              !Number.isInteger(waypointIndex) || waypointIndex < 0 || waypointIndex >= intermediateStops.length
+            ) ||
+            new Set(optimizedIndexes).size !== intermediateStops.length
+          ) {
+            return new Response(
+              JSON.stringify({ error: "Google Routes did not return a valid optimized waypoint order." }),
+              { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            );
+          }
+          const orderedIntermediates = optimizedIndexes.map((waypointIndex: number) =>
+            intermediateStops[waypointIndex]
+          );
+          routedStops = startLocation
+            ? [...orderedIntermediates, destination]
+            : [stops[0], ...orderedIntermediates, destination];
+        }
+
+        const formatter = new Intl.DateTimeFormat("en-US", {
+          timeZone: "Asia/Manila",
+          weekday: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+          hourCycle: "h23",
+        });
+        const dayKeys: Record<string, string> = {
+          Sun: "sun", Mon: "mon", Tue: "tue", Wed: "wed", Thu: "thu", Fri: "fri", Sat: "sat",
+        };
+        let elapsedMinutes = 0;
+        let totalEstimatedMinutes = 0;
+        const legTimes = legs.map((leg: { distanceMeters: number; duration: string }) => {
+          const distanceKm = leg.distanceMeters / 1000;
+          const durationSeconds = googleDurationSeconds(leg.duration)!;
+          const travelMinutes = mode === "jeepney"
+            ? (distanceKm / TRANSPORT_SPEEDS.jeepney) * 60
+            : durationSeconds / 60;
+          const minutes = travelMinutes + TRANSFER_OVERHEAD[mode];
+          totalEstimatedMinutes += minutes;
+          return minutes;
+        });
+        const arrivals = routedStops.map((stop, index) => {
+          if (index > 0 || startLocation) {
+            elapsedMinutes += legTimes[startLocation ? index : index - 1];
+          }
+          const arrival = new Date(departure.getTime() + elapsedMinutes * 60_000);
+          const parts: Record<string, string> = Object.fromEntries(
+            formatter.formatToParts(arrival).map((part) => [part.type, part.value]),
+          );
+          const day = dayKeys[parts.weekday];
+          const hours = stop.operating_hours?.[day];
+          const arrivalMinutes = Number(parts.hour) * 60 + Number(parts.minute);
+          let closingAlert: string | null = null;
+          let hoursLabel = hours || "Hours not provided";
+          const hoursMatch = hours?.match(/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/);
+          if (hours?.toLowerCase() === "closed") {
+            hoursLabel = "Closed that day";
+            closingAlert = "This boutique is closed when you arrive.";
+          } else if (hoursMatch) {
+            const openMinutes = Number(hoursMatch[1]) * 60 + Number(hoursMatch[2]);
+            const closeMinutes = Number(hoursMatch[3]) * 60 + Number(hoursMatch[4]);
+            if (arrivalMinutes < openMinutes) closingAlert = `Opens at ${hoursMatch[1]}:${hoursMatch[2]}; you arrive before opening.`;
+            else if (arrivalMinutes >= closeMinutes) closingAlert = `Closes at ${hoursMatch[3]}:${hoursMatch[4]}; you arrive after closing.`;
+            else if (closeMinutes - arrivalMinutes <= 30) closingAlert = "Arriving shortly before closing.";
+            hoursLabel = hours;
+          }
+          return {
+            boutique_id: stop.boutique_id,
+            boutique_name: stop.boutique_name,
+            arrival_at: arrival.toISOString(),
+            local_arrival: formatter.format(arrival),
+            hours_label: hoursLabel,
+            closing_alert: closingAlert,
+          };
+        });
+
+        return new Response(
+          JSON.stringify({
+            arrivals,
+            ordered_stops: routedStops,
+            estimated_total_time_minutes: Math.round(totalEstimatedMinutes),
+            total_route_distance_km: route.distanceMeters / 1000,
+            route_coordinates: routeCoordinates.map(([lat, lng]) => [lng, lat]),
+            route_provider: "Google Maps Routes API",
+            waypoint_optimization: intermediateStops.length > 1,
+            traffic_included: false,
+            timezone: "Asia/Manila",
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
       const routingProfile = mode === "walking" ? "routed-foot" : "routed-car";
       const coordinates = points.map((point) => `${point.lng},${point.lat}`).join(";");
       const routeResponse = await fetch(
@@ -280,10 +506,12 @@ Deno.serve(async (req: Request) => {
       return new Response(
         JSON.stringify({
           arrivals,
+          ordered_stops: stops,
           estimated_total_time_minutes: Math.round(totalEstimatedMinutes),
           total_route_distance_km: route.distance / 1000,
           route_coordinates: route.geometry.coordinates,
           route_provider: "OpenStreetMap",
+          waypoint_optimization: false,
           traffic_included: false,
           timezone: "Asia/Manila",
         }),

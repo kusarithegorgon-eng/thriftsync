@@ -11,6 +11,8 @@ import {
   confirmPaymongoCheckout,
   createPaymongoCheckout,
   isPaymongoTestMode,
+  notifySellerOfOrders,
+  simulateGcashCheckout,
 } from '@/lib/paymongo';
 
 type DeliveryMode = 'courier' | 'pickup' | 'locker';
@@ -38,9 +40,12 @@ export function CheckoutPage() {
   const [lockers, setLockers] = useState<LockerLocation[]>([]);
   const [selectedLockerId, setSelectedLockerId] = useState('');
   const [lockerLoadError, setLockerLoadError] = useState<string | null>(null);
+  const [paymentMode, setPaymentMode] = useState<'gcash' | 'all' | 'gcash_demo'>('gcash');
+  const [sellerEmailNotice, setSellerEmailNotice] = useState<string | null>(null);
   const paymongoReturnHandled = useRef(false);
 
   const hasAuctionItems = items.some((i) => i.listing.listing_type === 'auction');
+  const gcashSimulationEnabled = import.meta.env.VITE_GCASH_SIMULATION_ENABLED === 'true' && isPaymongoTestMode;
   const boutiqueIds = items.map((i) => i.listing.boutique_id).filter(Boolean) as string[];
   const categories = items.map((i) => i.listing.category).filter(Boolean) as string[];
 
@@ -104,10 +109,19 @@ export function CheckoutPage() {
     }
     setProcessing(true);
     setCheckoutError(null);
+    setSellerEmailNotice(null);
     void confirmPaymongoCheckout(sessionId)
-      .then(() => {
+      .then(async (result) => {
         sessionStorage.removeItem(PAYMONGO_SESSION_KEY);
         clearCart();
+        if (result.order_ids?.length) {
+          const notification = await notifySellerOfOrders(result.order_ids);
+          setSellerEmailNotice(notification.message || (
+            notification.status === 'sent'
+              ? 'An email order notice was sent to the seller.'
+              : 'The order is visible in the seller dashboard, but seller email is not configured.'
+          ));
+        }
         setStep('complete');
       })
       .catch((error: unknown) => {
@@ -208,6 +222,7 @@ export function CheckoutPage() {
     }
     setProcessing(true);
     setCheckoutError(null);
+    setSellerEmailNotice(null);
 
     const fullAddress = deliveryMode === 'pickup'
       ? `PICKUP at ${selectedPickup?.name || 'boutique'}, ${selectedPickup?.barangay || ''}, ${selectedPickup?.location || 'Cebu'}`
@@ -244,8 +259,27 @@ export function CheckoutPage() {
         title: listing.title,
       }));
 
+      if (paymentMode === 'gcash_demo') {
+        const result = await simulateGcashCheckout({
+          items: orderItems,
+          shipping_address: fullAddress,
+          voucher_code: appliedVoucher?.code || null,
+          delivery_method: deliveryMode,
+          locker_location_id: deliveryMode === 'locker' ? selectedLockerId : null,
+        });
+        const notification = await notifySellerOfOrders(result.order_ids);
+        setSellerEmailNotice(notification.message || (
+          notification.status === 'sent'
+            ? 'An email order notice was sent to the seller.'
+            : 'The order is visible in the seller dashboard, but seller email is not configured.'
+        ));
+        clearCart();
+        setStep('complete');
+        return;
+      }
+
       if (finalTotal <= 0) {
-        const { error } = await supabase.rpc('checkout_fixed_items_with_fulfillment', {
+        const { data, error } = await supabase.rpc('checkout_fixed_items_with_fulfillment', {
           p_shipping_address: fullAddress,
           p_items: orderItems.map(({ listing_id, amount }) => ({ listing_id, amount })),
           p_voucher_code: appliedVoucher?.code || null,
@@ -257,6 +291,16 @@ export function CheckoutPage() {
             throw new Error('A product became unavailable while you were checking out. Return to your cart, remove it, and try again.');
           }
           throw new Error(error.message);
+        }
+        const rpcResult = Array.isArray(data) ? data[0] : data;
+        const orderIds = rpcResult?.order_ids || [];
+        if (orderIds.length > 0) {
+          const notification = await notifySellerOfOrders(orderIds);
+          setSellerEmailNotice(notification.message || (
+            notification.status === 'sent'
+              ? 'An email order notice was sent to the seller.'
+              : 'The order is visible in the seller dashboard, but seller email is not configured.'
+          ));
         }
         clearCart();
         setStep('complete');
@@ -270,6 +314,7 @@ export function CheckoutPage() {
         voucher_code: appliedVoucher?.code || null,
         delivery_method: deliveryMode,
         locker_location_id: deliveryMode === 'locker' ? selectedLockerId : null,
+        payment_method: paymentMode,
         success_url: `${returnBase}#/checkout?paymongo=success`,
         cancel_url: `${returnBase}#/checkout?paymongo=cancel`,
       });
@@ -307,12 +352,17 @@ export function CheckoutPage() {
         </div>
         <h1 className="font-serif text-2xl font-bold text-ink-900 mb-2">Order Placed Successfully</h1>
         <p className="text-sm text-ink-500 mb-6">
-          {deliveryMode === 'locker'
+          {paymentMode === 'gcash_demo'
+            ? 'GCash demo completed. No payment was collected; this order is clearly marked as simulated.'
+            : deliveryMode === 'locker'
             ? 'Your locker PIN is available in My Orders. Share it with the seller for drop-off, then use it to confirm pickup after the item is deposited.'
             : deliveryMode === 'pickup'
             ? 'Your items are ready for pickup at the boutique in Cebu. Coordinate with the seller for pickup details.'
             : 'Your items will be delivered via local courier within Cebu. Payment is held in escrow until delivery confirmation.'}
         </p>
+        {sellerEmailNotice && (
+          <p role="status" className="text-sm text-ink-600 mb-6">{sellerEmailNotice}</p>
+        )}
         <div className="flex gap-3 justify-center">
           <button onClick={() => navigate({ name: 'orders' })} className="btn-primary">View Orders</button>
           <button onClick={() => navigate({ name: 'browse' })} className="btn-secondary">Continue Shopping</button>
@@ -669,18 +719,66 @@ export function CheckoutPage() {
                 </div>
               )}
 
+              <section className="mb-4">
+                <h3 className="text-xs font-medium text-ink-700 mb-2">Payment method</h3>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMode('gcash')}
+                    className={cn(
+                      'rounded-lg border-2 p-3 text-left transition-colors',
+                      paymentMode === 'gcash' ? 'border-ink-900 bg-ink-50' : 'border-ink-200 hover:border-ink-300',
+                    )}
+                  >
+                    <span className="block text-sm font-medium text-ink-900">GCash via PayMongo</span>
+                    <span className="block text-xs text-ink-500">Continue to the secure GCash payment flow.</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMode('all')}
+                    className={cn(
+                      'rounded-lg border-2 p-3 text-left transition-colors',
+                      paymentMode === 'all' ? 'border-ink-900 bg-ink-50' : 'border-ink-200 hover:border-ink-300',
+                    )}
+                  >
+                    <span className="block text-sm font-medium text-ink-900">Other PayMongo methods</span>
+                    <span className="block text-xs text-ink-500">Choose from the payment methods PayMongo supports.</span>
+                  </button>
+                  {gcashSimulationEnabled && (
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMode('gcash_demo')}
+                      className={cn(
+                        'rounded-lg border-2 p-3 text-left transition-colors sm:col-span-2',
+                        paymentMode === 'gcash_demo' ? 'border-gold-500 bg-gold-50' : 'border-ink-200 hover:border-ink-300',
+                      )}
+                    >
+                      <span className="block text-sm font-medium text-ink-900">GCash demo simulation (no real payment)</span>
+                      <span className="block text-xs text-ink-500">Test the order flow without entering GCash credentials or moving money.</span>
+                    </button>
+                  )}
+                </div>
+              </section>
+
               <div className="flex items-center gap-2 mb-4 p-3 bg-sage-50 rounded-lg">
                 <Shield className="w-5 h-5 text-sage-600 shrink-0" />
                 <p className="text-xs text-sage-800">
-                  You will pay <strong>{formatPrice(finalTotal)}</strong> on PayMongo
-                  {isPaymongoTestMode ? ' (test mode)' : ''}. The order is recorded as held until you confirm delivery.
+                  {paymentMode === 'gcash_demo'
+                    ? <>This demo records a simulated GCash transaction for <strong>{formatPrice(finalTotal)}</strong>. No payment is collected.</>
+                    : <>You will pay <strong>{formatPrice(finalTotal)}</strong> on PayMongo{isPaymongoTestMode ? ' (test mode)' : ''}. The order is recorded as held until you confirm delivery.</>}
                 </p>
               </div>
 
               <div className="flex gap-2">
                 <button onClick={() => setStep('shipping')} className="btn-secondary flex-1">Edit</button>
                 <button onClick={handlePlaceOrder} disabled={processing} className="btn-terracotta flex-1 py-3">
-                  {processing ? 'Redirecting to PayMongo...' : `Pay with PayMongo — ${formatPrice(finalTotal)}`}
+                  {processing
+                    ? paymentMode === 'gcash_demo' ? 'Simulating GCash...' : 'Redirecting to PayMongo...'
+                    : paymentMode === 'gcash_demo'
+                      ? `Run GCash demo — ${formatPrice(finalTotal)}`
+                      : paymentMode === 'gcash'
+                        ? `Pay with GCash — ${formatPrice(finalTotal)}`
+                        : `Continue to PayMongo — ${formatPrice(finalTotal)}`}
                 </button>
               </div>
             </div>

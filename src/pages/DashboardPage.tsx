@@ -2,11 +2,14 @@ import { useEffect, useState } from 'react';
 import { TrendingUp, Package, DollarSign, Eye, Gavel, Plus, ArrowRight, Clock, Truck, Share2, KeyRound } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
-import { supabase, type Listing, type Boutique, type Order } from '@/lib/supabase';
+import { supabase, type Listing, type Boutique, type Order, type Profile } from '@/lib/supabase';
 import { formatPrice, formatTimeAgo, cn } from '@/lib/utils';
 import { SellerLiveAuctionBiddersModal } from '@/components/SellerLiveAuctionBiddersModal';
 
-type SellerOrder = Order & { listings: Pick<Listing, 'title'> | null };
+type SellerOrder = Order & {
+  listings: Pick<Listing, 'title'> | null;
+  profiles: Pick<Profile, 'display_name'> | null;
+};
 
 export function DashboardPage() {
   const { navigate } = useRouter();
@@ -47,7 +50,7 @@ export function DashboardPage() {
 
         const { data: orderData } = await supabase
           .from('orders')
-          .select('*, listings(title)')
+          .select('*, listings(title), profiles(display_name)')
           .eq('boutique_id', (boutiqueData as Boutique).id)
           .order('created_at', { ascending: false })
           .limit(10);
@@ -305,6 +308,14 @@ export function DashboardPage() {
                     <p className="text-xs text-ink-600 truncate">
                       {order.listings?.title || 'Item'}
                     </p>
+                    <p className="text-xs text-ink-600 truncate">
+                      Buyer: {order.profiles?.display_name || `Buyer ${order.buyer_id.slice(0, 8)}`}
+                    </p>
+                    {order.payment_is_simulated && (
+                      <p className="mt-1 text-[10px] font-medium text-gold-700">
+                        GCash demo — no payment collected
+                      </p>
+                    )}
                     <p className="text-xs text-ink-400">{formatTimeAgo(order.created_at)}</p>
                     {order.status === 'escrow_held' && order.delivery_method === 'locker' && (
                       <form

@@ -64,6 +64,8 @@ export function ThriftCrawlPage() {
   const [routePath, setRoutePath] = useState<[number, number][] | null>(null);
   const [routeDistanceKm, setRouteDistanceKm] = useState<number | null>(null);
   const [routeDurationMinutes, setRouteDurationMinutes] = useState<number | null>(null);
+  const [routeStops, setRouteStops] = useState<ItineraryStop[] | null>(null);
+  const [routeProvider, setRouteProvider] = useState<string | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
 
   useEffect(() => {
@@ -109,6 +111,8 @@ export function ThriftCrawlPage() {
       setRoutePath(null);
       setRouteDistanceKm(null);
       setRouteDurationMinutes(null);
+      setRouteStops(null);
+      setRouteProvider(null);
       setRouteLoading(false);
       return;
     }
@@ -118,6 +122,8 @@ export function ThriftCrawlPage() {
     setRoutePath(null);
     setRouteDistanceKm(null);
     setRouteDurationMinutes(null);
+    setRouteStops(null);
+    setRouteProvider(null);
     if (optimized.ordered_stops.length === 1 && !startLocation) {
       setEtaError(null);
       setRouteLoading(false);
@@ -173,6 +179,20 @@ export function ThriftCrawlPage() {
         setRoutePath(coordinates.map(([lng, lat]) => [lat, lng]));
         setRouteDistanceKm(data.total_route_distance_km);
         setRouteDurationMinutes(data.estimated_total_time_minutes);
+        if (Array.isArray(data.ordered_stops)) {
+          const knownStops = new Map(optimized.ordered_stops.map((stop) => [stop.boutique_id, stop]));
+          const orderedIds = data.ordered_stops.map((stop: { boutique_id?: unknown }) => stop?.boutique_id);
+          if (
+            orderedIds.length !== optimized.ordered_stops.length
+            || orderedIds.some((id: unknown) => typeof id !== 'string' || !knownStops.has(id))
+            || new Set(orderedIds).size !== optimized.ordered_stops.length
+          ) {
+            setEtaError('The route service returned an invalid stop order.');
+            return;
+          }
+          setRouteStops(orderedIds.map((id: string) => knownStops.get(id)!));
+        }
+        setRouteProvider(typeof data.route_provider === 'string' ? data.route_provider : 'OpenStreetMap');
         setEtaError(null);
       } catch (error) {
         if (active) {
@@ -317,13 +337,13 @@ export function ThriftCrawlPage() {
   }
 
   const routePositions = routePath || [];
-  const displayedStops = optimized?.ordered_stops || selectedStops;
+  const displayedStops = routeStops || optimized?.ordered_stops || selectedStops;
   const arrivals = etaArrivals;
   const mapPoints = [
     ...selectedStops.map(({ lat: pointLat, lng: pointLng }) => ({ lat: pointLat, lng: pointLng })),
     ...(startLocation ? [startLocation] : []),
   ];
-  const firstStop = optimized?.ordered_stops[0];
+  const firstStop = displayedStops[0];
   const directionsUrl = startLocation && firstStop
     ? `https://www.google.com/maps/dir/?api=1&origin=${startLocation.lat},${startLocation.lng}&destination=${firstStop.lat},${firstStop.lng}&travelmode=${transportMode === 'walking' ? 'walking' : transportMode === 'jeepney' ? 'transit' : 'driving'}`
     : null;
@@ -531,9 +551,9 @@ export function ThriftCrawlPage() {
               <div className="mt-3 pt-3 border-t border-ink-100">
                 <p className="text-xs text-ink-400 text-center">
                   {routeLoading
-                    ? 'Finding a street route…'
+                    ? 'Finding the best route through your selected boutiques…'
                     : routePath
-                      ? `Street route via OpenStreetMap for ${transportMode}. Travel times do not include live traffic; jeepney times are approximate.`
+                      ? `${routeProvider || 'Street route'} for ${transportMode}${routeProvider === 'Google Maps Routes API' ? ' with automatic stop-order optimization' : ''}. Travel times do not include live traffic; jeepney times are approximate.`
                       : 'Street route unavailable; no straight-line route is shown. Local fallback distance and time estimates may be inaccurate.'}
                 </p>
                 {startLocation && firstStop && (

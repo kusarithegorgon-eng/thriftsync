@@ -292,6 +292,11 @@ export function OrdersPage() {
                     <OrderStatusBadge status={order.status} />
                     <span className="text-xs text-ink-400">{formatTimeAgo(order.created_at)}</span>
                   </div>
+                  {order.payment_is_simulated && (
+                    <p className="mt-2 text-xs font-medium text-gold-700">
+                      GCash demo only — no payment was collected.
+                    </p>
+                  )}
                   {order.delivery_method === 'locker' && (
                     <div className="mt-3 rounded-lg bg-ink-50 p-3">
                       <p className="text-xs font-medium text-ink-800">
