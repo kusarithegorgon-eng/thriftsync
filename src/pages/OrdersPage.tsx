@@ -292,6 +292,7 @@ export function OrdersPage() {
                     <OrderStatusBadge status={order.status} />
                     <span className="text-xs text-ink-400">{formatTimeAgo(order.created_at)}</span>
                   </div>
+<<<<<<< HEAD
                   {order.listings?.listing_type === 'auction' && order.status === 'escrow_held' && (
                     <div className="mt-3 rounded-lg border border-sage-200 bg-sage-50 p-3">
                       <p className="flex items-center gap-1.5 text-xs font-semibold text-sage-800">
@@ -308,6 +309,12 @@ export function OrdersPage() {
                         <MessageCircle className="h-3.5 w-3.5" /> Contact seller
                       </button>
                     </div>
+=======
+                  {order.payment_is_simulated && (
+                    <p className="mt-2 text-xs font-medium text-gold-700">
+                      GCash demo only — no payment was collected.
+                    </p>
+>>>>>>> bf730924cf86662820d5ff39ef10d0764e39f6f8
                   )}
                   {order.delivery_method === 'locker' && (
                     <div className="mt-3 rounded-lg bg-ink-50 p-3">

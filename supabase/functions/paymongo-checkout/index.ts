@@ -49,13 +49,6 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const secretKey = Deno.env.get("PAYMONGO_SECRET_KEY");
-    if (!secretKey || secretKey.includes("your_secret_key")) {
-      return jsonResponse(500, {
-        error: "PAYMONGO_SECRET_KEY is not set on the server. Use supabase secrets set PAYMONGO_SECRET_KEY=...",
-      });
-    }
-
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const authHeader = req.headers.get("Authorization");
@@ -77,6 +70,189 @@ Deno.serve(async (req: Request) => {
 
     const body = await req.json();
     const action = body.action;
+    const secretKey = Deno.env.get("PAYMONGO_SECRET_KEY") || "";
+    if (
+      (action === "create" || action === "confirm") &&
+      (!secretKey || secretKey.includes("your_secret_key"))
+    ) {
+      return jsonResponse(500, {
+        error: "PAYMONGO_SECRET_KEY is not set on the server. Use supabase secrets set PAYMONGO_SECRET_KEY=...",
+      });
+    }
+
+    if (action === "simulate_gcash") {
+      if (
+        Deno.env.get("GCASH_SIMULATION_ENABLED") !== "true" ||
+        secretKey.startsWith("sk_live_")
+      ) {
+        return jsonResponse(403, { error: "GCash simulation is not enabled for this Supabase project." });
+      }
+
+      const items = Array.isArray(body.items) ? body.items : [];
+      if (items.length < 1 || items.length > 50) {
+        return jsonResponse(400, { error: "The cart is empty or invalid." });
+      }
+      const listingIds = items.map((item: { listing_id: string }) => item.listing_id);
+      const { data: listings, error: listingError } = await userClient
+        .from("listings")
+        .select("id, price, status, moderation_status, listing_type")
+        .in("id", listingIds);
+      if (listingError) return jsonResponse(400, { error: listingError.message });
+      if (!listings || listings.length !== listingIds.length) {
+        return jsonResponse(409, { error: "One or more cart items are no longer available." });
+      }
+      for (const listing of listings) {
+        const requested = items.find((item: { listing_id: string }) => item.listing_id === listing.id);
+        if (
+          listing.status !== "active" ||
+          listing.moderation_status !== "approved" ||
+          listing.listing_type === "auction"
+        ) {
+          return jsonResponse(409, { error: "One or more cart items are not eligible for fixed-item checkout." });
+        }
+        if (requested && Number(requested.amount) !== Number(listing.price)) {
+          return jsonResponse(409, { error: "An item price changed. Refresh your cart." });
+        }
+      }
+
+      const { data: checkoutResult, error: checkoutError } = await userClient.rpc(
+        "checkout_fixed_items_with_fulfillment",
+        {
+          p_shipping_address: String(body.shipping_address || "").slice(0, 2000),
+          p_items: items.map((item: { listing_id: string; amount: number }) => ({
+            listing_id: item.listing_id,
+            amount: item.amount,
+          })),
+          p_voucher_code: body.voucher_code || null,
+          p_delivery_method: body.delivery_method || "courier",
+          p_locker_location_id: body.locker_location_id || null,
+        },
+      );
+      if (checkoutError) return jsonResponse(400, { error: checkoutError.message });
+      const result = Array.isArray(checkoutResult) ? checkoutResult[0] : checkoutResult;
+      const orderIds = result?.order_ids || [];
+      if (!Array.isArray(orderIds) || orderIds.length === 0) {
+        return jsonResponse(500, { error: "The GCash demo did not create any orders." });
+      }
+
+      const { error: paymentMetadataError } = await adminClient
+        .from("orders")
+        .update({ payment_method: "gcash_demo", payment_is_simulated: true })
+        .in("id", orderIds)
+        .eq("buyer_id", userData.user.id);
+      if (paymentMetadataError) {
+        return jsonResponse(500, {
+          error: `Demo orders were created, but could not be marked as simulated: ${paymentMetadataError.message}`,
+          order_ids: orderIds,
+        });
+      }
+      return jsonResponse(200, { success: true, order_ids: orderIds });
+    }
+
+    if (action === "notify_sellers") {
+      const orderIds = Array.isArray(body.order_ids)
+        ? [...new Set(body.order_ids.filter((id: unknown): id is string => typeof id === "string"))]
+        : [];
+      if (orderIds.length < 1 || orderIds.length > 50) {
+        return jsonResponse(400, { error: "Order ids are missing or invalid." });
+      }
+
+      const { data: orders, error: ordersError } = await userClient
+        .from("orders")
+        .select("id, amount, delivery_method, payment_method, payment_is_simulated, listings(title), boutiques(name, seller_id)")
+        .in("id", orderIds)
+        .eq("buyer_id", userData.user.id);
+      if (ordersError) return jsonResponse(400, { error: ordersError.message });
+      if (!orders || orders.length !== orderIds.length) {
+        return jsonResponse(404, { error: "One or more orders were not found for this buyer." });
+      }
+
+      const serviceId = Deno.env.get("EMAILJS_SERVICE_ID");
+      const templateId = Deno.env.get("EMAILJS_ORDER_TEMPLATE_ID");
+      const publicKey = Deno.env.get("EMAILJS_PUBLIC_KEY");
+      if (!serviceId || !templateId || !publicKey) {
+        return jsonResponse(200, {
+          status: "not_configured",
+          sent_count: 0,
+          message: "Seller email is not configured. The new order is visible in the seller dashboard.",
+        });
+      }
+
+      const { data: buyerProfile, error: buyerProfileError } = await adminClient
+        .from("profiles")
+        .select("display_name")
+        .eq("id", userData.user.id)
+        .maybeSingle();
+      if (buyerProfileError) return jsonResponse(500, { error: buyerProfileError.message });
+
+      type NotificationOrder = {
+        id: string;
+        amount: number;
+        delivery_method: string;
+        payment_method: string;
+        payment_is_simulated: boolean;
+        listings: { title: string } | null;
+        boutiques: { name: string; seller_id: string } | null;
+      };
+      const sellerOrders = new Map<string, NotificationOrder[]>();
+      const failures: string[] = [];
+      for (const order of orders as NotificationOrder[]) {
+        const sellerId = order.boutiques?.seller_id;
+        if (!sellerId) {
+          failures.push("Could not resolve a seller for an order.");
+          continue;
+        }
+        sellerOrders.set(sellerId, [...(sellerOrders.get(sellerId) || []), order]);
+      }
+
+      let sentCount = 0;
+      for (const [sellerId, sellerOrderList] of sellerOrders) {
+        const { data: sellerResult, error: sellerError } = await adminClient.auth.admin.getUserById(sellerId);
+        const sellerEmail = sellerResult?.user?.email;
+        if (sellerError || !sellerEmail) {
+          failures.push("Could not resolve a seller email address.");
+          continue;
+        }
+        const total = sellerOrderList.reduce((sum, order) => sum + Number(order.amount), 0);
+        const response = await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            service_id: serviceId,
+            template_id: templateId,
+            user_id: publicKey,
+            template_params: {
+              to_email: sellerEmail,
+              buyer_name: buyerProfile?.display_name || userData.user.email || "ThriftSync buyer",
+              buyer_email: userData.user.email || "",
+              boutique_name: sellerOrderList[0].boutiques?.name || "Your boutique",
+              order_items: sellerOrderList.map((order) => order.listings?.title || "Item").join(", "),
+              order_ids: sellerOrderList.map((order) => order.id).join(", "),
+              order_total: `PHP ${total.toFixed(2)}`,
+              delivery_methods: [...new Set(sellerOrderList.map((order) => order.delivery_method))].join(", "),
+              payment_notice: sellerOrderList.some((order) => order.payment_is_simulated)
+                ? "GCash demo only — no payment collected."
+                : sellerOrderList.every((order) => order.payment_method === "paymongo")
+                  ? "PayMongo payment confirmed."
+                  : "Review the payment method shown in your ThriftSync dashboard.",
+            },
+          }),
+        });
+        if (!response.ok) {
+          failures.push(`EmailJS rejected a seller notification (${response.status}).`);
+          continue;
+        }
+        sentCount += 1;
+      }
+
+      return jsonResponse(200, {
+        status: failures.length > 0 ? "failed" : "sent",
+        sent_count: sentCount,
+        message: failures.length > 0
+          ? `${sentCount} seller email(s) sent; ${failures.join(" ")}`
+          : `${sentCount} seller email notification(s) sent.`,
+      });
+    }
 
     if (action === "create") {
       const items = Array.isArray(body.items) ? body.items : [];
@@ -187,8 +363,11 @@ Deno.serve(async (req: Request) => {
         return { response, json };
       };
 
-      let { response, json } = await createSession(["card", "gcash", "paymaya", "grab_pay"]);
-      if (!response.ok) {
+      const paymentMethodTypes = body.payment_method === "gcash"
+        ? ["gcash"]
+        : ["card", "gcash", "paymaya", "grab_pay"];
+      let { response, json } = await createSession(paymentMethodTypes);
+      if (!response.ok && paymentMethodTypes.length > 1) {
         const retry = await createSession(["card"]);
         response = retry.response;
         json = retry.json;
@@ -307,6 +486,11 @@ Deno.serve(async (req: Request) => {
 
       const result = Array.isArray(checkoutResult) ? checkoutResult[0] : checkoutResult;
       const orderIds = result?.order_ids || [];
+      const { error: paymentMetadataError } = await adminClient
+        .from("orders")
+        .update({ payment_method: "paymongo", payment_is_simulated: false })
+        .in("id", orderIds)
+        .eq("buyer_id", userData.user.id);
       await adminClient
         .from("paymongo_checkouts")
         .update({
@@ -320,6 +504,7 @@ Deno.serve(async (req: Request) => {
         success: true,
         order_ids: orderIds,
         discount_amount: result?.discount_amount || 0,
+        payment_metadata_warning: paymentMetadataError?.message,
       });
     }
 

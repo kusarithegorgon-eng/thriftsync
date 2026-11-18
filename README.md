@@ -16,8 +16,12 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    [`bid error fix`](./supabase/migrations/20261013000000_fix_place_bid_message_ambiguity.sql),
    [`order fulfillment migration`](./supabase/migrations/20261013010000_add_order_fulfillment_flow.sql),
    [`marketplace trust features`](./supabase/migrations/20261107000000_add_marketplace_trust_and_live_features.sql),
+<<<<<<< HEAD
    [`auction settlement and winner notifications`](./supabase/migrations/20261118000000_settle_ended_english_auctions.sql),
    [`one-to-one barter workflow`](./supabase/migrations/20261118110000_complete_one_to_one_barter.sql),
+=======
+   [`checkout payment metadata`](./supabase/migrations/20261108000000_add_checkout_payment_metadata.sql),
+>>>>>>> bf730924cf86662820d5ff39ef10d0764e39f6f8
    and any later migrations in timestamp order in the Supabase SQL Editor.
 2. Copy `.env.example` to `.env` and set `VITE_SUPABASE_URL` and
    `VITE_SUPABASE_ANON_KEY` from your Supabase project's API settings. The
@@ -29,7 +33,9 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    values for the Contact Us form using a separate
    `VITE_EMAILJS_CONTACT_TEMPLATE_ID`. Configure that EmailJS template with
    `name`, `email`, `title`, and `message` variables, and set the recipient to
-   your support inbox rather than a value supplied by the form.
+   your support inbox rather than a value supplied by the form. Seller order
+   emails require a separate transaction template configured with a dynamic
+   `{{to_email}}` recipient and the buyer/order variables described below.
 3. In Supabase Dashboard, open Authentication settings and enable email
    confirmations. In the Confirm signup email template, include Supabase's
    `{{ .Token }}` value so users receive an eight-digit one-time code. The EmailJS template
@@ -44,7 +50,23 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    `npx supabase secrets set PAYMONGO_SECRET_KEY=sk_test_...` so the secret never
    ships in the Vite bundle. Checkout then redirects buyers to PayMongo Hosted
    Checkout and only creates the marketplace order after PayMongo reports the
-   session as paid.
+   session as paid. Select **GCash via PayMongo** to restrict the hosted checkout
+   to GCash; other PayMongo methods remain available separately. To test the
+   simulated, non-payment GCash flow, set `VITE_GCASH_SIMULATION_ENABLED=true`
+   locally with a `pk_test_` public key and set
+   `GCASH_SIMULATION_ENABLED=true` only in a development Supabase project. The
+   demo never asks for GCash credentials or collects money and marks resulting
+   orders as simulated. Do not enable it in production.
+
+   Seller order emails are sent by the `paymongo-checkout` Edge Function after
+   checkout. Create a dedicated EmailJS transaction template (do not reuse a
+   signup/MFA or Contact Us template) with `{{to_email}}` as the recipient and
+   `{{buyer_name}}`, `{{buyer_email}}`, `{{boutique_name}}`, `{{order_items}}`,
+   `{{order_ids}}`, `{{order_total}}`, `{{delivery_methods}}`, and
+   `{{payment_notice}}` in its content.
+   Set `EMAILJS_SERVICE_ID`, `EMAILJS_ORDER_TEMPLATE_ID`, and
+   `EMAILJS_PUBLIC_KEY` as Supabase secrets. Email failure is reported after
+   checkout; the buyer and item still appear in the seller dashboard.
 5. Install Node.js 20 or later, run `npm install`, then run `npm run dev`.
    Open the local URL printed by Vite, usually `http://localhost:5173`.
 
@@ -84,10 +106,19 @@ walking, driving, motorbike, or jeepney travel, set a departure time, review the
 estimated arrival times and operating-hours alerts, and sign in to save it.
 Sellers manage weekly boutique hours from the Sell page. Use **Use my location**
 to include your current position as the route origin; the planner will select
-the nearest chosen boutique as the first stop. The map uses street or foot-path
-geometry from OpenStreetMap routing, and the distance and arrival estimates use
-the routed legs. Live traffic is not included; jeepney travel time is
-approximate and does not represent an official jeepney route. If road routing is
+the nearest chosen boutique as the first stop. To use Google Maps Routes for
+street routing and automatic stop-order optimization, enable the Routes API in
+Google Cloud, configure billing, and set `GOOGLE_MAPS_API_KEY` as a
+`thrift-crawl` Supabase Edge Function secret (never as a `VITE_` variable).
+For example, set it with `npx supabase secrets set GOOGLE_MAPS_API_KEY=your-key`
+and redeploy the `thrift-crawl` function. Restrict the key to the Routes API.
+The provider reorders intermediate stops
+based on route efficiency and returns street geometry and leg estimates; Google
+charges waypoint optimization at the Compute Routes Pro rate. Without this
+secret, the planner continues to use OpenStreetMap street/foot routing in the
+existing stop order. A configured Google API error is shown instead of silently
+switching providers. Live traffic is not included; jeepney travel time is
+approximate and does not represent an official jeepney route. If routing is
 unavailable, the planner hides the route line and labels its local fallback
 estimates rather than drawing a misleading straight line.
 **Get directions there** opens Google Maps for turn-by-turn routing to the first

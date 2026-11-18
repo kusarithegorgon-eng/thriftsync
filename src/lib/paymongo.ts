@@ -6,6 +6,7 @@ export type PaymongoCreateInput = {
   voucher_code: string | null;
   delivery_method: 'courier' | 'pickup' | 'locker';
   locker_location_id: string | null;
+  payment_method: 'gcash' | 'all';
   success_url: string;
   cancel_url: string;
 };
@@ -15,6 +16,12 @@ export type PaymongoConfirmResult = {
   already_fulfilled?: boolean;
   order_ids?: string[];
   discount_amount?: number;
+};
+
+export type SellerEmailNotification = {
+  status: 'sent' | 'not_configured' | 'failed';
+  sent_count?: number;
+  message?: string;
 };
 
 function invokeError(error: { message?: string } | null, data: unknown, fallback: string) {
@@ -47,6 +54,36 @@ export async function confirmPaymongoCheckout(checkoutSessionId: string) {
     throw invokeError(error, data, 'PayMongo payment could not be confirmed.');
   }
   return data as PaymongoConfirmResult;
+}
+
+export async function simulateGcashCheckout(input: Omit<PaymongoCreateInput, 'payment_method' | 'success_url' | 'cancel_url'>) {
+  const { data, error } = await supabase.functions.invoke('paymongo-checkout', {
+    body: { action: 'simulate_gcash', ...input },
+  });
+  if (error || !data?.success || !Array.isArray(data?.order_ids)) {
+    throw invokeError(error, data, 'GCash demo checkout could not be completed.');
+  }
+  return data as { success: true; order_ids: string[] };
+}
+
+export async function notifySellerOfOrders(orderIds: string[]): Promise<SellerEmailNotification> {
+  try {
+    const { data, error } = await supabase.functions.invoke('paymongo-checkout', {
+      body: { action: 'notify_sellers', order_ids: orderIds },
+    });
+    if (error) {
+      return { status: 'failed', message: error.message };
+    }
+    if (!data || typeof data.status !== 'string') {
+      return { status: 'failed', message: 'The seller email notification returned an invalid response.' };
+    }
+    return data as SellerEmailNotification;
+  } catch (error) {
+    return {
+      status: 'failed',
+      message: error instanceof Error ? error.message : 'The seller email notification could not be sent.',
+    };
+  }
 }
 
 export const PAYMONGO_SESSION_KEY = 'thriftsync-paymongo-session';

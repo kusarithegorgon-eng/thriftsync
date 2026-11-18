@@ -42,6 +42,83 @@ const DEFAULT_STORE_HOURS: Record<string, string> = {
   sun: 'closed',
 };
 
+const STORE_HOUR_TIMES = Array.from({ length: 48 }, (_, index) => {
+  const minutes = index * 30;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return `${String(hours).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+});
+
+function parseStoreHours(value: string) {
+  const match = /^(\d{2}:\d{2})-(\d{2}:\d{2})$/.exec(value);
+  if (match && match[1] < match[2]) {
+    return { opens: match[1], closes: match[2] };
+  }
+  return { opens: '10:00', closes: '20:00' };
+}
+
+function formatStoreTime(time: string) {
+  const [hours, minutes] = time.split(':').map(Number);
+  const period = hours >= 12 ? 'PM' : 'AM';
+  const displayHour = hours % 12 || 12;
+  return `${displayHour}:${String(minutes).padStart(2, '0')} ${period}`;
+}
+
+function OperatingHoursRow({
+  day,
+  label,
+  value,
+  onChange,
+}: {
+  day: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const isClosed = value === 'closed';
+  const { opens, closes } = parseStoreHours(value);
+
+  return (
+    <div className="flex items-center gap-2 text-xs text-ink-600">
+      <span className="w-20 shrink-0">{label}</span>
+      <select
+        aria-label={`${label} operating status`}
+        value={isClosed ? 'closed' : 'open'}
+        onChange={(event) => onChange(event.target.value === 'closed' ? 'closed' : `${opens}-${closes}`)}
+        className="input-field w-24 py-2 text-xs"
+      >
+        <option value="open">Open</option>
+        <option value="closed">Closed</option>
+      </select>
+      {!isClosed && (
+        <>
+          <select
+            aria-label={`${label} opening time`}
+            value={opens}
+            onChange={(event) => onChange(`${event.target.value}-${closes}`)}
+            className="input-field min-w-0 flex-1 py-2 text-xs"
+          >
+            {STORE_HOUR_TIMES.filter((time) => time < closes).map((time) => (
+              <option key={`${day}-open-${time}`} value={time}>{formatStoreTime(time)}</option>
+            ))}
+          </select>
+          <span>to</span>
+          <select
+            aria-label={`${label} closing time`}
+            value={closes}
+            onChange={(event) => onChange(`${opens}-${event.target.value}`)}
+            className="input-field min-w-0 flex-1 py-2 text-xs"
+          >
+            {STORE_HOUR_TIMES.filter((time) => time > opens).map((time) => (
+              <option key={`${day}-close-${time}`} value={time}>{formatStoreTime(time)}</option>
+            ))}
+          </select>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function SellPage() {
   const { navigate } = useRouter();
   const { user, profile } = useAuth();
@@ -110,7 +187,10 @@ export function SellPage() {
         setError(storeError.message);
       } else if (data) {
         setStore(data as Pick<Boutique, 'id' | 'name'>);
-        setBoutiqueOperatingHours((data.operating_hours as Record<string, string>) || {});
+        setBoutiqueOperatingHours({
+          ...DEFAULT_STORE_HOURS,
+          ...((data.operating_hours as Record<string, string>) || {}),
+        });
         setStep('listing');
       }
       setStoreLoading(false);
@@ -505,18 +585,16 @@ export function SellPage() {
 
             <div className="rounded-xl border border-ink-200 p-4">
               <h3 className="text-sm font-medium text-ink-900">Boutique operating hours</h3>
-              <p className="mb-3 text-xs text-ink-500">Set weekly hours so Thrift Crawl visitors can check their arrival time. Use 24-hour HH:MM-HH:MM or enter “closed”.</p>
+              <p className="mb-3 text-xs text-ink-500">Set weekly hours so Thrift Crawl visitors can check their arrival time.</p>
               <div className="grid gap-2 sm:grid-cols-2">
                 {STORE_HOUR_DAYS.map(({ key, label }) => (
-                  <label key={key} className="flex items-center gap-2 text-xs text-ink-600">
-                    <span className="w-20">{label}</span>
-                    <input
-                      value={boutiqueOperatingHours[key] || ''}
-                      onChange={(event) => setBoutiqueOperatingHours((current) => ({ ...current, [key]: event.target.value }))}
-                      className="input-field py-2 text-xs"
-                      placeholder="10:00-20:00 or closed"
-                    />
-                  </label>
+                  <OperatingHoursRow
+                    key={key}
+                    day={key}
+                    label={label}
+                    value={boutiqueOperatingHours[key] || DEFAULT_STORE_HOURS[key]}
+                    onChange={(value) => setBoutiqueOperatingHours((current) => ({ ...current, [key]: value }))}
+                  />
                 ))}
               </div>
             </div>
@@ -543,18 +621,16 @@ export function SellPage() {
               <p className="mb-3 text-xs text-ink-500">Keep these current so Thrift Crawl itineraries can warn visitors about closing times.</p>
               <div className="grid gap-2 sm:grid-cols-2">
                 {STORE_HOUR_DAYS.map(({ key, label }) => (
-                  <label key={key} className="flex items-center gap-2 text-xs text-ink-600">
-                    <span className="w-20">{label}</span>
-                    <input
-                      value={boutiqueOperatingHours[key] || ''}
-                      onChange={(event) => {
-                        setHoursSaved(false);
-                        setBoutiqueOperatingHours((current) => ({ ...current, [key]: event.target.value }));
-                      }}
-                      className="input-field py-2 text-xs"
-                      placeholder="10:00-20:00 or closed"
-                    />
-                  </label>
+                  <OperatingHoursRow
+                    key={key}
+                    day={key}
+                    label={label}
+                    value={boutiqueOperatingHours[key] || DEFAULT_STORE_HOURS[key]}
+                    onChange={(value) => {
+                      setHoursSaved(false);
+                      setBoutiqueOperatingHours((current) => ({ ...current, [key]: value }));
+                    }}
+                  />
                 ))}
               </div>
               <div className="mt-3 flex items-center justify-between gap-3">
