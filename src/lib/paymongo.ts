@@ -66,6 +66,18 @@ export async function simulateGcashCheckout(input: Omit<PaymongoCreateInput, 'pa
   return data as { success: true; order_ids: string[] };
 }
 
+export async function createCashOnDeliveryOrders(
+  input: Omit<PaymongoCreateInput, 'payment_method' | 'success_url' | 'cancel_url'>,
+) {
+  const { data, error } = await supabase.functions.invoke('paymongo-checkout', {
+    body: { action: 'create_cash_on_delivery', ...input },
+  });
+  if (error || !data?.success || !Array.isArray(data?.order_ids)) {
+    throw invokeError(error, data, 'Cash-on-receipt checkout could not be completed.');
+  }
+  return data as { success: true; order_ids: string[] };
+}
+
 export async function notifySellerOfOrders(orderIds: string[]): Promise<SellerEmailNotification> {
   try {
     const { data, error } = await supabase.functions.invoke('paymongo-checkout', {

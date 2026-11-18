@@ -189,6 +189,22 @@ export function TradesPage({ requestedListingId }: { requestedListingId?: string
     setActionLoading(null);
   }
 
+  async function messageTradePartner(offerId: string) {
+    setActionLoading(offerId);
+    setError(null);
+    const { data: conversationId, error: conversationError } = await supabase.rpc('get_or_create_trade_conversation', {
+      p_trade_offer_id: offerId,
+    });
+    if (conversationError) {
+      setError(conversationError.message);
+    } else if (conversationId) {
+      navigate({ name: 'messages', conversationId });
+    } else {
+      setError('Could not open a conversation for this trade.');
+    }
+    setActionLoading(null);
+  }
+
   if (!authLoading && !user) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-20 text-center">
@@ -276,7 +292,7 @@ export function TradesPage({ requestedListingId }: { requestedListingId?: string
             actionLoading={actionLoading}
             onRespond={respond}
             onConfirm={confirmExchange}
-            onMessage={(listingId) => navigate({ name: 'messages', listingId })}
+            onMessage={messageTradePartner}
           />
           <TradeSection
             title="Offers you sent"
@@ -285,7 +301,7 @@ export function TradesPage({ requestedListingId }: { requestedListingId?: string
             actionLoading={actionLoading}
             onRespond={respond}
             onConfirm={confirmExchange}
-            onMessage={(listingId) => navigate({ name: 'messages', listingId })}
+            onMessage={messageTradePartner}
           />
         </div>
       )}
@@ -308,7 +324,7 @@ function TradeSection({
   actionLoading: string | null;
   onRespond: (offerId: string, action: 'accept' | 'reject' | 'cancel') => void;
   onConfirm: (offerId: string) => void;
-  onMessage: (listingId: string) => void;
+  onMessage: (offerId: string) => void;
 }) {
   return (
     <section>
@@ -320,7 +336,6 @@ function TradeSection({
           {offers.map((offer) => {
             const isIncoming = offer.recipient_id === currentUserId;
             const myShipment = offer.trade_shipments?.find((shipment) => shipment.recipient_id === currentUserId);
-            const targetItem = offer.trade_items.find((item) => item.side === 'REQUESTED');
             const canConfirm = ['ACCEPTED', 'SHIPPED_BY_PARTY_A', 'SHIPPED_BY_PARTY_B'].includes(offer.status)
               && myShipment?.status === 'PENDING';
             const isBusy = actionLoading === offer.id;
@@ -413,13 +428,14 @@ function TradeSection({
                       {isBusy ? 'Confirming…' : 'Confirm item received'}
                     </button>
                   )}
-                  {['ACCEPTED', 'SHIPPED_BY_PARTY_A', 'SHIPPED_BY_PARTY_B'].includes(offer.status) && targetItem && (
+                  {['ACCEPTED', 'SHIPPED_BY_PARTY_A', 'SHIPPED_BY_PARTY_B'].includes(offer.status) && (
                     <button
                       type="button"
-                      onClick={() => onMessage(targetItem.listing_id)}
+                      onClick={() => onMessage(offer.id)}
+                      disabled={isBusy}
                       className="btn-secondary inline-flex items-center gap-1.5 text-sm"
                     >
-                      <MessageCircle className="h-4 w-4" /> Message seller
+                      <MessageCircle className="h-4 w-4" /> Message other seller
                     </button>
                   )}
                 </div>

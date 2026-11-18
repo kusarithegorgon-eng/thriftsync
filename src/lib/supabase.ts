@@ -67,7 +67,7 @@ export type Order = {
   id: string; buyer_id: string; listing_id: string; boutique_id: string; amount: number;
   status: 'escrow_held' | 'shipped' | 'delivered' | 'completed' | 'disputed' | 'refunded' | 'in_escrow';
   shipping_address: string | null; tracking_number: string | null; delivery_method: 'courier' | 'pickup' | 'locker';
-  locker_location_id: string | null; payment_method: 'paymongo' | 'voucher' | 'gcash_demo' | 'unknown';
+  locker_location_id: string | null; payment_method: 'paymongo' | 'voucher' | 'gcash_demo' | 'cash_on_delivery' | 'unknown';
   payment_is_simulated: boolean; created_at: string;
 };
 export type AuctionWinnerNotification = {

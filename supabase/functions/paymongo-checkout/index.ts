@@ -4,7 +4,8 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers":
-    "Content-Type, Authorization, X-Client-Info, Apikey",
+    "Content-Type, Authorization, X-Client-Info, Apikey, X-Supabase-Api-Version",
+  "Access-Control-Max-Age": "86400",
 };
 
 const PAYMONGO_CREATE_URL = "https://api.paymongo.com/v2/checkout_sessions";
@@ -80,12 +81,84 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    if (action === "create_cash_on_delivery") {
+      const items = Array.isArray(body.items) ? body.items : [];
+      const deliveryMethod = body.delivery_method;
+      if (items.length < 1 || items.length > 50) {
+        return jsonResponse(400, { error: "The cart is empty or invalid." });
+      }
+      if (deliveryMethod !== "courier" && deliveryMethod !== "pickup") {
+        return jsonResponse(400, { error: "Pay on receipt is available only for courier delivery or boutique pickup." });
+      }
+
+      const listingIds = items.map((item: { listing_id: string }) => item.listing_id);
+      if (new Set(listingIds).size !== listingIds.length) {
+        return jsonResponse(400, { error: "A listing appears more than once in the cart." });
+      }
+      const { data: listings, error: listingError } = await userClient
+        .from("listings")
+        .select("id, price, status, moderation_status, listing_type")
+        .in("id", listingIds);
+      if (listingError) return jsonResponse(400, { error: listingError.message });
+      if (!listings || listings.length !== listingIds.length) {
+        return jsonResponse(409, { error: "One or more cart items are no longer available." });
+      }
+      for (const listing of listings) {
+        const requested = items.find((item: { listing_id: string }) => item.listing_id === listing.id);
+        if (
+          listing.status !== "active" ||
+          listing.moderation_status !== "approved" ||
+          listing.listing_type === "auction"
+        ) {
+          return jsonResponse(409, { error: "One or more cart items are not eligible for fixed-item checkout." });
+        }
+        if (!requested || Number(requested.amount) !== Number(listing.price)) {
+          return jsonResponse(409, { error: "An item price changed. Refresh your cart." });
+        }
+      }
+
+      const { data: checkoutResult, error: checkoutError } = await userClient.rpc(
+        "checkout_fixed_items_with_fulfillment",
+        {
+          p_shipping_address: String(body.shipping_address || "").slice(0, 2000),
+          p_items: items.map((item: { listing_id: string; amount: number }) => ({
+            listing_id: item.listing_id,
+            amount: item.amount,
+          })),
+          p_voucher_code: body.voucher_code || null,
+          p_delivery_method: deliveryMethod,
+          p_locker_location_id: null,
+        },
+      );
+      if (checkoutError) return jsonResponse(400, { error: checkoutError.message });
+      const result = Array.isArray(checkoutResult) ? checkoutResult[0] : checkoutResult;
+      const orderIds = result?.order_ids || [];
+      if (!Array.isArray(orderIds) || orderIds.length === 0) {
+        return jsonResponse(500, { error: "Cash-on-receipt checkout did not create any orders." });
+      }
+
+      const { error: paymentMetadataError } = await adminClient
+        .from("orders")
+        .update({ payment_method: "cash_on_delivery", payment_is_simulated: false })
+        .in("id", orderIds)
+        .eq("buyer_id", userData.user.id);
+      if (paymentMetadataError) {
+        return jsonResponse(500, {
+          error: `Orders were created, but could not be marked for payment on receipt: ${paymentMetadataError.message}`,
+          order_ids: orderIds,
+        });
+      }
+      return jsonResponse(200, { success: true, order_ids: orderIds });
+    }
+
     if (action === "simulate_gcash") {
       if (
         Deno.env.get("GCASH_SIMULATION_ENABLED") !== "true" ||
-        secretKey.startsWith("sk_live_")
+        !secretKey.startsWith("sk_test_")
       ) {
-        return jsonResponse(403, { error: "GCash simulation is not enabled for this Supabase project." });
+        return jsonResponse(403, {
+          error: "GCash simulation requires GCASH_SIMULATION_ENABLED=true and a PayMongo test secret key on this Supabase project.",
+        });
       }
 
       const items = Array.isArray(body.items) ? body.items : [];
@@ -232,6 +305,8 @@ Deno.serve(async (req: Request) => {
               delivery_methods: [...new Set(sellerOrderList.map((order) => order.delivery_method))].join(", "),
               payment_notice: sellerOrderList.some((order) => order.payment_is_simulated)
                 ? "GCash demo only — no payment collected."
+                : sellerOrderList.some((order) => order.payment_method === "cash_on_delivery")
+                  ? "Cash on receipt — collect payment directly from the buyer at handoff."
                 : sellerOrderList.every((order) => order.payment_method === "paymongo")
                   ? "PayMongo payment confirmed."
                   : "Review the payment method shown in your ThriftSync dashboard.",

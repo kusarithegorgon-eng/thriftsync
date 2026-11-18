@@ -9,6 +9,7 @@ import { CebuMap } from '@/components/CebuMap';
 import {
   PAYMONGO_SESSION_KEY,
   confirmPaymongoCheckout,
+  createCashOnDeliveryOrders,
   createPaymongoCheckout,
   isPaymongoTestMode,
   notifySellerOfOrders,
@@ -16,6 +17,8 @@ import {
 } from '@/lib/paymongo';
 
 type DeliveryMode = 'courier' | 'pickup' | 'locker';
+
+const gcashSimulationEnabled = import.meta.env.VITE_GCASH_SIMULATION_ENABLED === 'true' && isPaymongoTestMode;
 
 export function CheckoutPage() {
   const { navigate } = useRouter();
@@ -40,12 +43,13 @@ export function CheckoutPage() {
   const [lockers, setLockers] = useState<LockerLocation[]>([]);
   const [selectedLockerId, setSelectedLockerId] = useState('');
   const [lockerLoadError, setLockerLoadError] = useState<string | null>(null);
-  const [paymentMode, setPaymentMode] = useState<'gcash' | 'all' | 'gcash_demo'>('gcash');
+  const [paymentMode, setPaymentMode] = useState<'gcash' | 'gcash_demo' | 'cash_on_delivery'>(
+    gcashSimulationEnabled ? 'gcash_demo' : 'gcash',
+  );
   const [sellerEmailNotice, setSellerEmailNotice] = useState<string | null>(null);
   const paymongoReturnHandled = useRef(false);
 
   const hasAuctionItems = items.some((i) => i.listing.listing_type === 'auction');
-  const gcashSimulationEnabled = import.meta.env.VITE_GCASH_SIMULATION_ENABLED === 'true' && isPaymongoTestMode;
   const boutiqueIds = items.map((i) => i.listing.boutique_id).filter(Boolean) as string[];
   const categories = items.map((i) => i.listing.category).filter(Boolean) as string[];
 
@@ -259,6 +263,25 @@ export function CheckoutPage() {
         title: listing.title,
       }));
 
+      if (paymentMode === 'cash_on_delivery') {
+        const result = await createCashOnDeliveryOrders({
+          items: orderItems,
+          shipping_address: fullAddress,
+          voucher_code: appliedVoucher?.code || null,
+          delivery_method: deliveryMode,
+          locker_location_id: null,
+        });
+        const notification = await notifySellerOfOrders(result.order_ids);
+        setSellerEmailNotice(notification.message || (
+          notification.status === 'sent'
+            ? 'An email order notice was sent to the seller.'
+            : 'The order is visible in the seller dashboard, but seller email is not configured.'
+        ));
+        clearCart();
+        setStep('complete');
+        return;
+      }
+
       if (paymentMode === 'gcash_demo') {
         const result = await simulateGcashCheckout({
           items: orderItems,
@@ -354,6 +377,8 @@ export function CheckoutPage() {
         <p className="text-sm text-ink-500 mb-6">
           {paymentMode === 'gcash_demo'
             ? 'GCash demo completed. No payment was collected; this order is clearly marked as simulated.'
+            : paymentMode === 'cash_on_delivery'
+            ? 'Your order is placed. Pay the seller or courier directly when you receive your item. No online payment was collected.'
             : deliveryMode === 'locker'
             ? 'Your locker PIN is available in My Orders. Share it with the seller for drop-off, then use it to confirm pickup after the item is deposited.'
             : deliveryMode === 'pickup'
@@ -425,7 +450,12 @@ export function CheckoutPage() {
                   {pickupBoutiques.length === 0 && <span className="text-[10px] text-ink-400">(none available)</span>}
                 </button>
                 <button
-                  onClick={() => setDeliveryMode('locker')}
+                  onClick={() => {
+                    setDeliveryMode('locker');
+                    if (paymentMode === 'cash_on_delivery') {
+                      setPaymentMode(gcashSimulationEnabled ? 'gcash_demo' : 'gcash');
+                    }
+                  }}
                   className={cn(
                     'flex items-center gap-2 p-3 rounded-lg border-2 transition-colors text-sm font-medium',
                     deliveryMode === 'locker' ? 'border-ink-900 bg-ink-50 text-ink-900' : 'border-ink-200 text-ink-500 hover:border-ink-300',
@@ -724,48 +754,51 @@ export function CheckoutPage() {
                 <div className="grid gap-2 sm:grid-cols-2">
                   <button
                     type="button"
-                    onClick={() => setPaymentMode('gcash')}
+                    onClick={() => setPaymentMode(gcashSimulationEnabled ? 'gcash_demo' : 'gcash')}
                     className={cn(
                       'rounded-lg border-2 p-3 text-left transition-colors',
-                      paymentMode === 'gcash' ? 'border-ink-900 bg-ink-50' : 'border-ink-200 hover:border-ink-300',
+                      paymentMode !== 'cash_on_delivery' ? 'border-ink-900 bg-ink-50' : 'border-ink-200 hover:border-ink-300',
                     )}
                   >
-                    <span className="block text-sm font-medium text-ink-900">GCash via PayMongo</span>
-                    <span className="block text-xs text-ink-500">Continue to the secure GCash payment flow.</span>
+                    <span className="mb-2 flex items-center gap-2 text-sm font-medium text-ink-900">
+                      <GCashIcon /> GCash online
+                    </span>
+                    <span className="block text-xs text-ink-500">
+                      {gcashSimulationEnabled
+                        ? 'Demo only: no money is collected.'
+                        : 'Pay online through PayMongo.'}
+                    </span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => setPaymentMode('all')}
+                    onClick={() => setPaymentMode('cash_on_delivery')}
+                    disabled={deliveryMode === 'locker'}
                     className={cn(
                       'rounded-lg border-2 p-3 text-left transition-colors',
-                      paymentMode === 'all' ? 'border-ink-900 bg-ink-50' : 'border-ink-200 hover:border-ink-300',
+                      paymentMode === 'cash_on_delivery' ? 'border-ink-900 bg-ink-50' : 'border-ink-200 hover:border-ink-300',
+                      deliveryMode === 'locker' && 'cursor-not-allowed opacity-50',
                     )}
                   >
-                    <span className="block text-sm font-medium text-ink-900">Other PayMongo methods</span>
-                    <span className="block text-xs text-ink-500">Choose from the payment methods PayMongo supports.</span>
+                    <span className="mb-2 flex items-center gap-2 text-sm font-medium text-ink-900">
+                      <CashOnReceiptIcon /> Pay on receipt
+                    </span>
+                    <span className="block text-xs text-ink-500">
+                      {deliveryMode === 'locker'
+                        ? 'Not available for locker pickup.'
+                        : 'Pay the seller or courier when you receive your item.'}
+                    </span>
                   </button>
-                  {gcashSimulationEnabled && (
-                    <button
-                      type="button"
-                      onClick={() => setPaymentMode('gcash_demo')}
-                      className={cn(
-                        'rounded-lg border-2 p-3 text-left transition-colors sm:col-span-2',
-                        paymentMode === 'gcash_demo' ? 'border-gold-500 bg-gold-50' : 'border-ink-200 hover:border-ink-300',
-                      )}
-                    >
-                      <span className="block text-sm font-medium text-ink-900">GCash demo simulation (no real payment)</span>
-                      <span className="block text-xs text-ink-500">Test the order flow without entering GCash credentials or moving money.</span>
-                    </button>
-                  )}
                 </div>
               </section>
 
               <div className="flex items-center gap-2 mb-4 p-3 bg-sage-50 rounded-lg">
                 <Shield className="w-5 h-5 text-sage-600 shrink-0" />
                 <p className="text-xs text-sage-800">
-                  {paymentMode === 'gcash_demo'
-                    ? <>This demo records a simulated GCash transaction for <strong>{formatPrice(finalTotal)}</strong>. No payment is collected.</>
-                    : <>You will pay <strong>{formatPrice(finalTotal)}</strong> on PayMongo{isPaymongoTestMode ? ' (test mode)' : ''}. The order is recorded as held until you confirm delivery.</>}
+                  {paymentMode === 'cash_on_delivery'
+                    ? <>Pay <strong>{formatPrice(finalTotal)}</strong> directly to the seller or courier when your item arrives. No online payment is collected.</>
+                    : paymentMode === 'gcash_demo'
+                      ? <>This GCash demo records <strong>{formatPrice(finalTotal)}</strong> as a simulated payment. No money is collected.</>
+                      : <>Pay <strong>{formatPrice(finalTotal)}</strong> online with GCash through PayMongo{isPaymongoTestMode ? ' (test mode)' : ''}.</>}
                 </p>
               </div>
 
@@ -773,12 +806,14 @@ export function CheckoutPage() {
                 <button onClick={() => setStep('shipping')} className="btn-secondary flex-1">Edit</button>
                 <button onClick={handlePlaceOrder} disabled={processing} className="btn-terracotta flex-1 py-3">
                   {processing
-                    ? paymentMode === 'gcash_demo' ? 'Simulating GCash...' : 'Redirecting to PayMongo...'
-                    : paymentMode === 'gcash_demo'
-                      ? `Run GCash demo — ${formatPrice(finalTotal)}`
-                      : paymentMode === 'gcash'
-                        ? `Pay with GCash — ${formatPrice(finalTotal)}`
-                        : `Continue to PayMongo — ${formatPrice(finalTotal)}`}
+                    ? paymentMode === 'cash_on_delivery'
+                      ? 'Placing order…'
+                      : paymentMode === 'gcash_demo' ? 'Simulating GCash...' : 'Redirecting to PayMongo...'
+                    : paymentMode === 'cash_on_delivery'
+                      ? `Place order — pay ${formatPrice(finalTotal)} on receipt`
+                      : paymentMode === 'gcash_demo'
+                        ? `Run GCash demo — ${formatPrice(finalTotal)}`
+                        : `Pay with GCash — ${formatPrice(finalTotal)}`}
                 </button>
               </div>
             </div>
@@ -823,5 +858,25 @@ function StepDot({ active, done, label }: { active: boolean; done: boolean; labe
       </div>
       <span className={`text-xs font-medium ${active ? 'text-ink-900' : 'text-ink-400'}`}>{label}</span>
     </div>
+  );
+}
+
+function GCashIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 64 32" className="h-7 w-14 shrink-0">
+      <rect x="1" y="1" width="62" height="30" rx="8" fill="#007DFE" />
+      <path d="M17 9a8 8 0 1 0 6 13.3V17h-6v3h2.5a4.5 4.5 0 1 1 .1-7.3l2.2-2.2A7.9 7.9 0 0 0 17 9Z" fill="#fff" />
+      <text x="29" y="20" fill="#fff" fontFamily="Arial, sans-serif" fontSize="10" fontWeight="700">GCash</text>
+    </svg>
+  );
+}
+
+function CashOnReceiptIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 40 32" className="h-7 w-10 shrink-0" fill="none">
+      <rect x="4" y="3" width="30" height="18" rx="3" stroke="currentColor" strokeWidth="2" />
+      <circle cx="19" cy="12" r="4" stroke="currentColor" strokeWidth="2" />
+      <path d="M7 8c2.5 0 3-1 3-3M31 8c-2.5 0-3-1-3-3M7 16c2.5 0 3 1 3 3M31 16c-2.5 0-3 1-3 3M8 27h17l8-5a2 2 0 0 0-2-3l-7 3h-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }

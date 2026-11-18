@@ -289,10 +289,9 @@ export function OrdersPage() {
                     </button>
                   )}
                   <div className="flex items-center gap-2 mt-2">
-                    <OrderStatusBadge status={order.status} />
+                    <OrderStatusBadge status={order.status} paymentMethod={order.payment_method} />
                     <span className="text-xs text-ink-400">{formatTimeAgo(order.created_at)}</span>
                   </div>
-<<<<<<< HEAD
                   {order.listings?.listing_type === 'auction' && order.status === 'escrow_held' && (
                     <div className="mt-3 rounded-lg border border-sage-200 bg-sage-50 p-3">
                       <p className="flex items-center gap-1.5 text-xs font-semibold text-sage-800">
@@ -309,12 +308,16 @@ export function OrdersPage() {
                         <MessageCircle className="h-3.5 w-3.5" /> Contact seller
                       </button>
                     </div>
-=======
+                  )}
                   {order.payment_is_simulated && (
                     <p className="mt-2 text-xs font-medium text-gold-700">
                       GCash demo only — no payment was collected.
                     </p>
->>>>>>> bf730924cf86662820d5ff39ef10d0764e39f6f8
+                  )}
+                  {order.payment_method === 'cash_on_delivery' && (
+                    <p className="mt-2 text-xs font-medium text-ink-600">
+                      Pay {formatPrice(Number(order.amount))} directly to the seller or courier when you receive the item. No online payment was collected.
+                    </p>
                   )}
                   {order.delivery_method === 'locker' && (
                     <div className="mt-3 rounded-lg bg-ink-50 p-3">
@@ -497,9 +500,11 @@ export function OrdersPage() {
   );
 }
 
-function OrderStatusBadge({ status }: { status: string }) {
+function OrderStatusBadge({ status, paymentMethod }: { status: string; paymentMethod: string }) {
   const config: Record<string, { label: string; className: string }> = {
-    escrow_held: { label: 'In Escrow', className: 'bg-gold-50 text-gold-700 border border-gold-200' },
+    escrow_held: paymentMethod === 'cash_on_delivery'
+      ? { label: 'Pay on receipt', className: 'bg-blue-50 text-blue-700 border border-blue-200' }
+      : { label: 'In Escrow', className: 'bg-gold-50 text-gold-700 border border-gold-200' },
     shipped: { label: 'Shipped', className: 'bg-blue-50 text-blue-700 border border-blue-200' },
     delivered: { label: 'Delivered', className: 'bg-sage-50 text-sage-700 border border-sage-200' },
     completed: { label: 'Completed', className: 'bg-sage-100 text-sage-800 border border-sage-300' },

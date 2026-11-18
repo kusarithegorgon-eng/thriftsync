@@ -16,12 +16,11 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    [`bid error fix`](./supabase/migrations/20261013000000_fix_place_bid_message_ambiguity.sql),
    [`order fulfillment migration`](./supabase/migrations/20261013010000_add_order_fulfillment_flow.sql),
    [`marketplace trust features`](./supabase/migrations/20261107000000_add_marketplace_trust_and_live_features.sql),
-<<<<<<< HEAD
+   [`checkout payment metadata`](./supabase/migrations/20261108000000_add_checkout_payment_metadata.sql),
    [`auction settlement and winner notifications`](./supabase/migrations/20261118000000_settle_ended_english_auctions.sql),
    [`one-to-one barter workflow`](./supabase/migrations/20261118110000_complete_one_to_one_barter.sql),
-=======
-   [`checkout payment metadata`](./supabase/migrations/20261108000000_add_checkout_payment_metadata.sql),
->>>>>>> bf730924cf86662820d5ff39ef10d0764e39f6f8
+   [`barter messaging`](./supabase/migrations/20261118130000_add_trade_conversations.sql),
+   [`cash-on-delivery payment method`](./supabase/migrations/20261118140000_add_cash_on_delivery_payment_method.sql),
    and any later migrations in timestamp order in the Supabase SQL Editor.
 2. Copy `.env.example` to `.env` and set `VITE_SUPABASE_URL` and
    `VITE_SUPABASE_ANON_KEY` from your Supabase project's API settings. The
@@ -50,13 +49,20 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    `npx supabase secrets set PAYMONGO_SECRET_KEY=sk_test_...` so the secret never
    ships in the Vite bundle. Checkout then redirects buyers to PayMongo Hosted
    Checkout and only creates the marketplace order after PayMongo reports the
-   session as paid. Select **GCash via PayMongo** to restrict the hosted checkout
-   to GCash; other PayMongo methods remain available separately. To test the
+   session as paid. Checkout offers **GCash online** or **Pay on receipt** for
+   courier delivery and boutique pickup. Pay-on-receipt orders require the buyer
+   to pay the seller or courier at handoff; the app does not collect or verify
+   that cash payment. To test the
    simulated, non-payment GCash flow, set `VITE_GCASH_SIMULATION_ENABLED=true`
    locally with a `pk_test_` public key and set
-   `GCASH_SIMULATION_ENABLED=true` only in a development Supabase project. The
-   demo never asks for GCash credentials or collects money and marks resulting
-   orders as simulated. Do not enable it in production.
+   `GCASH_SIMULATION_ENABLED=true` and a test-only `sk_test_` secret only in a
+   development Supabase project. After changing Edge Function code or these
+   secrets, redeploy the function with
+   `npx supabase functions deploy paymongo-checkout`. The
+   demo is preselected at checkout when those local settings are active, never
+   asks for GCash credentials or collects money, and marks resulting orders as
+   simulated. The Edge Function also requires a server-side `sk_test_` key.
+   Do not enable it in production.
 
    Seller order emails are sent by the `paymongo-checkout` Edge Function after
    checkout. Create a dedicated EmailJS transaction template (do not reuse a

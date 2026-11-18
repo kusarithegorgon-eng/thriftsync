@@ -11,7 +11,7 @@ import { ReportSubmissionModal } from '@/components/ReportSubmissionModal';
 export function ListingDetailPage({ listingId }: { listingId: string }) {
   const { navigate } = useRouter();
   const { user } = useAuth();
-  const { addToCart } = useCart();
+  const { addToCart, buyNow } = useCart();
 
   const [listing, setListing] = useState<Listing | null>(null);
   const [boutique, setBoutique] = useState<Boutique | null>(null);
@@ -269,22 +269,25 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
     setClaiming(false);
   }
 
-  async function handleBuyNow() {
+  function handleBuyNow() {
     if (!user) {
       navigate({ name: 'auth' });
       return;
     }
-
-    const { error } = await supabase.rpc('checkout_fixed_items', {
-      p_items: [{ listing_id: listing!.id, amount: Number(listing!.price) }],
-      p_shipping_address: 'Pending - Cebu pickup/delivery',
-      p_voucher_code: null,
+    if (!listing || !boutique || listing.listing_type !== 'fixed' || listing.status !== 'active') return;
+    buyNow({
+      ...listing,
+      boutiques: {
+        id: boutique.id,
+        name: boutique.name,
+        slug: boutique.slug,
+        logo_url: boutique.logo_url,
+        seller_id: boutique.seller_id,
+        seller_rating_avg: boutique.seller_rating_avg,
+        seller_rating_count: boutique.seller_rating_count,
+      },
     });
-    if (!error) {
-      navigate({ name: 'orders' });
-    } else {
-      setClaimError(error.message);
-    }
+    navigate({ name: 'checkout' });
   }
 
   function handleMakeTradeOffer() {
@@ -300,7 +303,19 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
       navigate({ name: 'auth' });
       return;
     }
-    addToCart({ ...listing, boutiques: boutique ? { id: boutique.id, name: boutique.name, slug: boutique.slug, logo_url: boutique.logo_url } : null } as ListingWithBoutique);
+    if (!listing) return;
+    addToCart({
+      ...listing,
+      boutiques: boutique ? {
+        id: boutique.id,
+        name: boutique.name,
+        slug: boutique.slug,
+        logo_url: boutique.logo_url,
+        seller_id: boutique.seller_id,
+        seller_rating_avg: boutique.seller_rating_avg,
+        seller_rating_count: boutique.seller_rating_count,
+      } : null,
+    });
     navigate({ name: 'cart' });
   }
 

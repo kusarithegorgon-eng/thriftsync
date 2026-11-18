@@ -9,6 +9,7 @@ export type CartItem = {
 type CartContextValue = {
   items: CartItem[];
   addToCart: (listing: ListingWithBoutique) => void;
+  buyNow: (listing: ListingWithBoutique) => void;
   removeFromCart: (listingId: string) => void;
   clearCart: () => void;
   total: number;
@@ -72,6 +73,12 @@ export function CartProvider({ children }: { children: ReactNode }) {
     });
   }
 
+  function buyNow(listing: ListingWithBoutique) {
+    setItems([{ listing, quantity: 1 }]);
+    setAppliedVoucherState(null);
+    setDiscountAmount(0);
+  }
+
   function removeFromCart(listingId: string) {
     setItems((prev) => prev.filter((item) => item.listing.id !== listingId));
   }
@@ -92,7 +99,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const finalTotal = Math.max(0, total - discountAmount);
 
   return (
-    <CartContext.Provider value={{ items, addToCart, removeFromCart, clearCart, total, itemCount, appliedVoucher, discountAmount, setAppliedVoucher, finalTotal }}>
+    <CartContext.Provider value={{ items, addToCart, buyNow, removeFromCart, clearCart, total, itemCount, appliedVoucher, discountAmount, setAppliedVoucher, finalTotal }}>
       {children}
     </CartContext.Provider>
   );

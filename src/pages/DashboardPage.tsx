@@ -360,6 +360,11 @@ export function DashboardPage() {
                         GCash demo — no payment collected
                       </p>
                     )}
+                    {order.payment_method === 'cash_on_delivery' && (
+                      <p className="mt-1 text-[10px] font-medium text-blue-700">
+                        Collect {formatPrice(Number(order.amount))} when the buyer receives the item.
+                      </p>
+                    )}
                     <p className="text-xs text-ink-400">{formatTimeAgo(order.created_at)}</p>
                     {order.status === 'escrow_held' && order.delivery_method === 'locker' && (
                       <form

@@ -216,6 +216,9 @@ export function MessagesPage({
           <ArrowLeft className="h-4 w-4" /> Browse
         </button>
       </div>
+      {error && !activeConversation && (
+        <p role="alert" className="mb-4 rounded-lg bg-terracotta-50 p-3 text-sm text-terracotta-700">{error}</p>
+      )}
       <div className="grid min-h-[620px] overflow-hidden rounded-2xl border border-ink-200 bg-white lg:grid-cols-[320px_1fr]">
         <aside className={`border-b border-ink-200 lg:border-b-0 lg:border-r ${activeConversation ? 'hidden lg:block' : ''}`}>
           <div className="border-b border-ink-100 p-4">
