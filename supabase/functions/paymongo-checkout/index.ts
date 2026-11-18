@@ -1,10 +1,10 @@
-import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { createClient } from "npm:@supabase/supabase-js@2.117.3";
+import { corsHeaders as supabaseCorsHeaders } from "npm:@supabase/supabase-js@2.117.3/cors";
 
 const corsHeaders = {
+  ...supabaseCorsHeaders,
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers":
-    "Content-Type, Authorization, X-Client-Info, Apikey, X-Supabase-Api-Version",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
   "Access-Control-Max-Age": "86400",
 };
 
@@ -46,7 +46,7 @@ function isPaidSession(session: Record<string, unknown>) {
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 200, headers: corsHeaders });
+    return Response.json({ ok: true }, { headers: corsHeaders });
   }
 
   try {

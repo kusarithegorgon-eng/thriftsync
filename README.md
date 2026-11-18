@@ -58,7 +58,9 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    `GCASH_SIMULATION_ENABLED=true` and a test-only `sk_test_` secret only in a
    development Supabase project. After changing Edge Function code or these
    secrets, redeploy the function with
-   `npx supabase functions deploy paymongo-checkout`. The
+   `npx supabase functions deploy paymongo-checkout`. Confirm the project
+   linked for deployment is the same development project configured by
+   `VITE_SUPABASE_URL`; do not enable simulated checkout on production. The
    demo is preselected at checkout when those local settings are active, never
    asks for GCash credentials or collects money, and marks resulting orders as
    simulated. The Edge Function also requires a server-side `sk_test_` key.
