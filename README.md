@@ -16,6 +16,8 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    [`bid error fix`](./supabase/migrations/20261013000000_fix_place_bid_message_ambiguity.sql),
    [`order fulfillment migration`](./supabase/migrations/20261013010000_add_order_fulfillment_flow.sql),
    [`marketplace trust features`](./supabase/migrations/20261107000000_add_marketplace_trust_and_live_features.sql),
+   [`auction settlement and winner notifications`](./supabase/migrations/20261118000000_settle_ended_english_auctions.sql),
+   [`one-to-one barter workflow`](./supabase/migrations/20261118110000_complete_one_to_one_barter.sql),
    and any later migrations in timestamp order in the Supabase SQL Editor.
 2. Copy `.env.example` to `.env` and set `VITE_SUPABASE_URL` and
    `VITE_SUPABASE_ANON_KEY` from your Supabase project's API settings. The
@@ -111,6 +113,19 @@ administrator access, update its `profiles.role` to `admin` in the Supabase
 Dashboard after signing up. Sellers can choose English auctions, where buyers
 place ascending bids, or Dutch auctions, where the price descends until a
 buyer claims the item.
+English auctions are settled automatically after their end time. The highest
+eligible bid (including the reserve-price check) becomes an order, and the winner
+receives an in-app notification linking them to **My Orders** to contact the
+seller and follow delivery or pickup. Settlement runs every minute using
+Supabase's `pg_cron` extension.
+
+For barter, sellers enable **Accept barter offers** on a fixed-price listing.
+Another seller can offer one of their own barter-enabled listings; offers have
+a 72-hour response window and do not reserve items while pending. Acceptance
+atomically reserves both listings. Each seller arranges the handover with the
+other and confirms receipt in **My Trades**; both confirmations complete the
+exchange and mark the listings as exchanged. Active accepted trade locks block
+checkout, bids, and listing removal until both parties confirm.
 
 The Privacy Notice and Terms of Use contain marked legal-business and contact
 placeholders. Replace them with verified details and have the notices reviewed

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { TrendingUp, Package, DollarSign, Eye, Gavel, Plus, ArrowRight, Clock, Truck, Share2, KeyRound } from 'lucide-react';
+import { TrendingUp, Package, DollarSign, Eye, Gavel, Plus, ArrowRight, Clock, Truck, Share2, KeyRound, ArrowLeftRight } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { supabase, type Listing, type Boutique, type Order } from '@/lib/supabase';
@@ -10,7 +10,7 @@ type SellerOrder = Order & { listings: Pick<Listing, 'title'> | null };
 
 export function DashboardPage() {
   const { navigate } = useRouter();
-  const { user, profile, loading: authLoading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [boutique, setBoutique] = useState<Boutique | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
   const [orders, setOrders] = useState<SellerOrder[]>([]);
@@ -20,6 +20,8 @@ export function DashboardPage() {
   const [orderActionLoading, setOrderActionLoading] = useState<string | null>(null);
   const [orderActionErrors, setOrderActionErrors] = useState<Record<string, string>>({});
   const [selectedAuction, setSelectedAuction] = useState<Listing | null>(null);
+  const [barterUpdatingId, setBarterUpdatingId] = useState<string | null>(null);
+  const [barterErrors, setBarterErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     async function load() {
@@ -117,6 +119,28 @@ export function DashboardPage() {
     }
   }
 
+  async function toggleBarterAvailability(listing: Listing) {
+    setBarterUpdatingId(listing.id);
+    setBarterErrors((current) => ({ ...current, [listing.id]: '' }));
+    try {
+      const { error } = await supabase
+        .from('listings')
+        .update({ barter_enabled: !listing.barter_enabled })
+        .eq('id', listing.id);
+      if (error) throw error;
+      setListings((current) => current.map((item) => item.id === listing.id
+        ? { ...item, barter_enabled: !item.barter_enabled }
+        : item));
+    } catch (error) {
+      setBarterErrors((current) => ({
+        ...current,
+        [listing.id]: error instanceof Error ? error.message : 'Could not update barter availability.',
+      }));
+    } finally {
+      setBarterUpdatingId(null);
+    }
+  }
+
   function shareListing(listing: Listing, platform: 'facebook' | 'x') {
     if (!boutique) return;
     const listingUrl = `${window.location.origin}${window.location.pathname}#/listing/${encodeURIComponent(listing.id)}`;
@@ -163,7 +187,7 @@ export function DashboardPage() {
   }
 
   const activeListings = listings.filter((l) => l.status === 'active');
-  const soldListings = listings.filter((l) => l.status === 'sold');
+  const soldListings = listings.filter((l) => l.status === 'sold' || l.status === 'exchanged');
   const totalViews = listings.reduce((sum, l) => sum + (l.views || 0), 0);
   const gmv = orders.reduce((sum, o) => sum + Number(o.amount), 0);
   const conversionRate = totalViews > 0 ? ((soldListings.length / totalViews) * 100).toFixed(1) : '0';
@@ -248,6 +272,21 @@ export function DashboardPage() {
                               <Gavel className="h-3 w-3" /> Live bidders
                             </button>
                           )}
+                          {listing.listing_type === 'fixed' && (
+                            <button
+                              type="button"
+                              onClick={() => void toggleBarterAvailability(listing)}
+                              disabled={barterUpdatingId === listing.id}
+                              aria-label={`${listing.barter_enabled ? 'Disable' : 'Enable'} barter for ${listing.title}`}
+                              className={cn(
+                                'inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-medium hover:bg-sage-50',
+                                listing.barter_enabled ? 'text-sage-700' : 'text-ink-600',
+                              )}
+                            >
+                              <ArrowLeftRight className="h-3 w-3" />
+                              {barterUpdatingId === listing.id ? 'Saving…' : listing.barter_enabled ? 'Barter on' : 'Enable barter'}
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => shareListing(listing, 'facebook')}
@@ -267,6 +306,11 @@ export function DashboardPage() {
                             <Share2 className="h-3 w-3" /> X
                           </button>
                         </div>
+                      )}
+                      {barterErrors[listing.id] && (
+                        <p role="alert" className="max-w-40 text-right text-[10px] text-terracotta-600">
+                          {barterErrors[listing.id]}
+                        </p>
                       )}
                     </div>
                   </div>

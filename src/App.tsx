@@ -12,6 +12,7 @@ import { CartPage } from '@/pages/CartPage';
 import { CheckoutPage } from '@/pages/CheckoutPage';
 import { WishlistPage } from '@/pages/WishlistPage';
 import { OrdersPage } from '@/pages/OrdersPage';
+import { TradesPage } from '@/pages/TradesPage';
 import { SellPage } from '@/pages/SellPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { VouchersPage } from '@/pages/VouchersPage';
@@ -46,6 +47,8 @@ function RouteRenderer() {
       return <WishlistPage />;
     case 'orders':
       return <OrdersPage />;
+    case 'trades':
+      return <TradesPage requestedListingId={route.listingId} />;
     case 'contact':
       return <ContactPage />;
     case 'sell':

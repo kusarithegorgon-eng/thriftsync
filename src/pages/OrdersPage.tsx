@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Package, Truck, CheckCircle, CheckCircle2, Clock, KeyRound, Star } from 'lucide-react';
+import { Package, Truck, CheckCircle, CheckCircle2, Clock, KeyRound, Star, Gavel, MessageCircle } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { supabase, type Order, type Listing, type Boutique, type LockerHandoff, type LockerLocation } from '@/lib/supabase';
 import { formatPrice, formatTimeAgo, cn } from '@/lib/utils';
 
 type OrderWithDetails = Order & {
-  listings: Pick<Listing, 'id' | 'title' | 'images'> | null;
+  listings: Pick<Listing, 'id' | 'title' | 'images' | 'listing_type'> | null;
   boutiques: Pick<Boutique, 'id' | 'name' | 'slug'> | null;
 };
 
@@ -35,7 +35,7 @@ export function OrdersPage() {
       }
       const { data, error } = await supabase
         .from('orders')
-        .select('*, listings(id, title, images), boutiques(id, name, slug)')
+        .select('*, listings(id, title, images, listing_type), boutiques(id, name, slug)')
         .eq('buyer_id', user.id)
         .order('created_at', { ascending: false });
 
@@ -292,6 +292,23 @@ export function OrdersPage() {
                     <OrderStatusBadge status={order.status} />
                     <span className="text-xs text-ink-400">{formatTimeAgo(order.created_at)}</span>
                   </div>
+                  {order.listings?.listing_type === 'auction' && order.status === 'escrow_held' && (
+                    <div className="mt-3 rounded-lg border border-sage-200 bg-sage-50 p-3">
+                      <p className="flex items-center gap-1.5 text-xs font-semibold text-sage-800">
+                        <Gavel className="h-3.5 w-3.5" /> You won this auction
+                      </p>
+                      <p className="mt-1 text-xs text-sage-700">
+                        Your order is ready. Message the seller to arrange delivery or pickup; shipping and locker updates will appear here.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => navigate({ name: 'messages', listingId: order.listing_id })}
+                        className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-sage-800 hover:text-sage-900"
+                      >
+                        <MessageCircle className="h-3.5 w-3.5" /> Contact seller
+                      </button>
+                    </div>
+                  )}
                   {order.delivery_method === 'locker' && (
                     <div className="mt-3 rounded-lg bg-ink-50 p-3">
                       <p className="text-xs font-medium text-ink-800">

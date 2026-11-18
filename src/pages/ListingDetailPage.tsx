@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Gavel, Heart, BadgeCheck, Clock, MapPin, MessageCircle, Shield, Truck, Leaf, ChevronRight, AlertCircle, TrendingDown, Zap } from 'lucide-react';
+import { Gavel, Heart, BadgeCheck, Clock, MapPin, MessageCircle, Shield, Truck, Leaf, ChevronRight, AlertCircle, TrendingDown, Zap, ArrowLeftRight } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { useCart } from '@/lib/cart';
@@ -287,6 +287,14 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
     }
   }
 
+  function handleMakeTradeOffer() {
+    if (!user) {
+      navigate({ name: 'auth' });
+      return;
+    }
+    navigate({ name: 'trades', listingId: listing!.id });
+  }
+
   function handleAddToCart() {
     if (!user) {
       navigate({ name: 'auth' });
@@ -428,6 +436,11 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
             {listing.sku && (
               <span className="text-xs text-ink-400 font-mono">SKU: {listing.sku}</span>
             )}
+            {listing.barter_enabled && listing.status === 'active' && listing.listing_type === 'fixed' && (
+              <span className="badge border border-sage-200 bg-sage-50 text-sage-700">
+                <ArrowLeftRight className="h-3 w-3" /> Open to barter
+              </span>
+            )}
           </div>
 
           {/* Price / Bid section */}
@@ -505,6 +518,20 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                       : 'Reserve price not yet met'}
                   </p>
                 )}
+                {!auctionActive && (
+                  <div className="mt-4 rounded-lg border border-ink-200 bg-ink-50 p-3">
+                    <p className="text-xs text-ink-600">
+                      Final results are processed automatically. If you won, you'll receive an in-app notification and your order will appear in My Orders.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => navigate({ name: 'orders' })}
+                      className="mt-2 text-xs font-medium text-terracotta-700 hover:text-terracotta-800"
+                    >
+                      Check My Orders for the result
+                    </button>
+                  </div>
+                )}
               </>
             ) : isAuction && isDutch ? (
               <>
@@ -555,17 +582,44 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                 )}
               </>
             ) : (
-              <div className="flex items-end justify-between">
+              listing.status === 'active' ? (
+                <div className="flex items-end justify-between">
+                  <div>
+                    <p className="text-xs text-ink-500 uppercase tracking-wide mb-1">Price</p>
+                    <p className="font-serif text-3xl font-bold text-ink-900">{formatPrice(Number(listing.price))}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={handleAddToCart} className="btn-secondary">Add to Cart</button>
+                    <button onClick={handleBuyNow} className="btn-primary">Buy Now</button>
+                  </div>
+                </div>
+              ) : (
                 <div>
                   <p className="text-xs text-ink-500 uppercase tracking-wide mb-1">Price</p>
                   <p className="font-serif text-3xl font-bold text-ink-900">{formatPrice(Number(listing.price))}</p>
+                  <p className="mt-2 text-sm text-ink-500">
+                    {listing.status === 'exchanged' ? 'This item has been exchanged.' : 'This item is no longer available.'}
+                  </p>
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={handleAddToCart} className="btn-secondary">Add to Cart</button>
-                  <button onClick={handleBuyNow} className="btn-primary">Buy Now</button>
-                </div>
-              </div>
+              )
             )}
+            {listing.barter_enabled
+              && listing.status === 'active'
+              && listing.listing_type === 'fixed'
+              && boutique?.seller_id !== user?.id && (
+                <div className="mt-4 border-t border-ink-100 pt-4">
+                  <p className="mb-2 text-xs text-ink-500">
+                    Offer one of your own barter-enabled listings in exchange. No cash top-ups.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleMakeTradeOffer}
+                    className="btn-secondary inline-flex items-center gap-2"
+                  >
+                    <ArrowLeftRight className="h-4 w-4" /> Make a barter offer
+                  </button>
+                </div>
+              )}
           </div>
 
           {/* Trust badges */}
@@ -647,7 +701,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-ink-900">
-                      {bid.bidder_label}{bid.is_winning ? ' · Highest Bidder' : ''}
+                      {bid.bidder_label}{bid.is_winning ? ` · ${listing.status === 'sold' ? 'Winner' : auctionActive ? 'Highest Bidder' : 'Highest Bid'}` : ''}
                     </p>
                     <p className="text-xs text-ink-400">{formatTimeAgo(bid.created_at)}</p>
                   </div>

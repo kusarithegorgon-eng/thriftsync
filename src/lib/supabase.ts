@@ -36,7 +36,8 @@ export type Listing = {
   auction_start_price: number | null; reserve_price: number | null; increment_step: number | null;
   decrement_rate: number | null; decrement_interval_minutes: number;
   current_dutch_price: number | null; dutch_floor_price: number | null;
-  status: 'active' | 'sold' | 'draft'; moderation_status: 'pending_review' | 'approved' | 'rejected';
+  status: 'active' | 'sold' | 'exchanged' | 'draft'; moderation_status: 'pending_review' | 'approved' | 'rejected';
+  barter_enabled: boolean;
   moderation_note: string | null; moderated_by: string | null; moderated_at: string | null;
   sku: string | null; coa_verified: boolean; views: number; created_at: string;
 };
@@ -68,13 +69,25 @@ export type Order = {
   shipping_address: string | null; tracking_number: string | null; delivery_method: 'courier' | 'pickup' | 'locker';
   locker_location_id: string | null; created_at: string;
 };
+export type AuctionWinnerNotification = {
+  id: string; recipient_id: string; listing_id: string; order_id: string;
+  title: string; body: string; read_at: string | null; created_at: string;
+};
 export type Review = { id: string; boutique_id: string; reviewer_id: string; rating: number; body: string | null; created_at: string };
 export type ListingWithBoutique = Listing & { boutiques: Pick<Boutique, 'id' | 'name' | 'slug' | 'logo_url' | 'seller_id' | 'seller_rating_avg' | 'seller_rating_count'> | null };
 export type BoutiqueWithListings = Boutique & { listings: Listing[] };
 export type TradeStatus = 'PENDING' | 'COUNTERED' | 'ACCEPTED' | 'REJECTED' | 'SHIPPED_BY_PARTY_A' | 'SHIPPED_BY_PARTY_B' | 'COMPLETED' | 'DISPUTED';
 export type TradeOffer = { id: string; initiator_id: string; recipient_id: string; status: TradeStatus; cash_top_up: number; expires_at: string; accepted_at: string | null; completed_at: string | null; created_at: string; updated_at: string };
-export type TradeItem = { id: string; trade_offer_id: string; listing_id: string; side: 'OFFERED' | 'REQUESTED'; title_snapshot: string; price_snapshot: number; created_at: string };
+export type TradeItem = {
+  id: string; trade_offer_id: string; listing_id: string; side: 'OFFERED' | 'REQUESTED';
+  title_snapshot: string; price_snapshot: number; created_at: string;
+  listings: Pick<Listing, 'id' | 'title' | 'images' | 'price'> | null;
+};
 export type TradeEvent = { id: string; trade_offer_id: string; actor_id: string | null; event_type: string; from_status: string | null; to_status: string | null; metadata: Record<string, unknown>; created_at: string };
+export type TradeNotification = {
+  id: string; recipient_id: string; trade_offer_id: string; title: string;
+  body: string; read_at: string | null; created_at: string;
+};
 export type TradeShipment = { id: string; trade_offer_id: string; party: 'A' | 'B'; sender_id: string; recipient_id: string; tracking_number: string | null; label_url: string | null; shipped_at: string | null; delivered_at: string | null; inspection_ends_at: string | null; status: string; created_at: string };
 export type TradeOfferWithItems = TradeOffer & { trade_items: TradeItem[]; trade_shipments: TradeShipment[] };
 export type VoucherScope = 'PLATFORM' | 'BOUTIQUE' | 'CATEGORY';

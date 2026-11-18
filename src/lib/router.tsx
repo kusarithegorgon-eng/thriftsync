@@ -12,6 +12,7 @@ export type Route =
   | { name: 'checkout' }
   | { name: 'auth' }
   | { name: 'orders' }
+  | { name: 'trades'; listingId?: string }
   | { name: 'contact' }
   | { name: 'vouchers' }
   | { name: 'thrift-crawl' }
@@ -65,6 +66,8 @@ export function RouterProvider({ children }: { children: ReactNode }) {
       setRoute({ name: 'auth' });
     } else if (parts[0] === 'orders') {
       setRoute({ name: 'orders' });
+    } else if (parts[0] === 'trades') {
+      setRoute({ name: 'trades', listingId: params.get('listing') || undefined });
     } else if (parts[0] === 'contact') {
       setRoute({ name: 'contact' });
     } else if (parts[0] === 'vouchers') {
@@ -111,6 +114,8 @@ export function RouterProvider({ children }: { children: ReactNode }) {
       if (newRoute.conversationId) params.set('conversation', newRoute.conversationId);
       const query = params.toString();
       hash = `#/messages${query ? `?${query}` : ''}`;
+    } else if (newRoute.name === 'trades' && newRoute.listingId) {
+      hash = `#/trades?listing=${encodeURIComponent(newRoute.listingId)}`;
     } else if (newRoute.name === 'profile') {
       hash = `#/profile/${encodeURIComponent(newRoute.id)}`;
     } else if (newRoute.name !== 'home') {

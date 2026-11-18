@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Gavel, Search, Heart, ShoppingBag, Menu, X, Store, User, LayoutDashboard, Package, Tag, MapPin, Lock, ShieldCheck, MessageCircle } from 'lucide-react';
+import { Gavel, Search, Heart, ShoppingBag, Menu, X, Store, User, LayoutDashboard, Package, Tag, MapPin, Lock, ShieldCheck, MessageCircle, Bell, ArrowLeftRight } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { useCart } from '@/lib/cart';
+import { supabase, type AuctionWinnerNotification, type TradeNotification } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
+
+type AppNotification = (AuctionWinnerNotification & { source: 'auction' }) | (TradeNotification & { source: 'trade' });
 
 export function Header() {
   const { route, navigate } = useRouter();
@@ -13,6 +16,55 @@ export function Header() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notificationMenuOpen, setNotificationMenuOpen] = useState(false);
+  const [notificationError, setNotificationError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const userId = user?.id;
+    if (!userId) {
+      setNotifications([]);
+      setNotificationError(null);
+      return;
+    }
+
+    async function loadNotifications() {
+      const [auctionResult, tradeResult] = await Promise.all([
+        supabase
+          .from('auction_winner_notifications')
+          .select('*')
+          .eq('recipient_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(20),
+        supabase
+          .from('trade_notifications')
+          .select('*')
+          .eq('recipient_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(20),
+      ]);
+
+      if (auctionResult.error || tradeResult.error) {
+        const error = auctionResult.error || tradeResult.error;
+        setNotificationError('Could not load notifications.');
+        console.error('Notification load error:', error);
+        return;
+      }
+
+      setNotificationError(null);
+      const auctionNotifications = ((auctionResult.data as AuctionWinnerNotification[]) || [])
+        .map((notification) => ({ ...notification, source: 'auction' as const }));
+      const tradeNotifications = ((tradeResult.data as TradeNotification[]) || [])
+        .map((notification) => ({ ...notification, source: 'trade' as const }));
+      setNotifications([...auctionNotifications, ...tradeNotifications]
+        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+        .slice(0, 20));
+    }
+
+    void loadNotifications();
+    const interval = setInterval(() => void loadNotifications(), 30000);
+    return () => clearInterval(interval);
+  }, [user?.id]);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 20);
@@ -23,6 +75,7 @@ export function Header() {
   useEffect(() => {
     setMenuOpen(false);
     setUserMenuOpen(false);
+    setNotificationMenuOpen(false);
   }, [route]);
 
   function handleSearch(e: React.FormEvent) {
@@ -30,7 +83,25 @@ export function Header() {
     navigate({ name: 'browse', q: searchValue || undefined });
   }
 
+  async function openNotification(notification: AppNotification) {
+    const { error } = notification.source === 'trade'
+      ? await supabase.rpc('mark_trade_notification_read', { p_notification_id: notification.id })
+      : await supabase.rpc('mark_auction_winner_notification_read', { p_notification_id: notification.id });
+    if (error) {
+      setNotificationError('Could not update this notification. Please try again.');
+      console.error('Notification update error:', error);
+      return;
+    }
+
+    setNotifications((current) => current.map((item) => item.id === notification.id
+      ? { ...item, read_at: item.read_at || new Date().toISOString() }
+      : item));
+    setNotificationMenuOpen(false);
+    navigate(notification.source === 'trade' ? { name: 'trades' } : { name: 'orders' });
+  }
+
   const isActive = (name: string) => route.name === name;
+  const unreadNotificationCount = notifications.filter((notification) => !notification.read_at).length;
 
   return (
     <>
@@ -125,15 +196,64 @@ export function Header() {
               >
                 <Package className={cn('w-5 h-5', isActive('orders') ? 'text-terracotta-600' : 'text-ink-700')} />
               </button>
+              <button
+                onClick={() => navigate({ name: 'trades' })}
+                className="p-2 rounded-lg hover:bg-ink-100 transition-colors"
+                aria-label="My Trades"
+                title="My Trades"
+              >
+                <ArrowLeftRight className={cn('w-5 h-5', isActive('trades') ? 'text-terracotta-600' : 'text-ink-700')} />
+              </button>
               {user && (
-                <button
-                  onClick={() => navigate({ name: 'messages' })}
-                  className="p-2 rounded-lg hover:bg-ink-100 transition-colors"
-                  aria-label="Messages"
-                  title="Messages"
-                >
-                  <MessageCircle className={cn('w-5 h-5', isActive('messages') ? 'text-terracotta-600' : 'text-ink-700')} />
-                </button>
+                <>
+                  <div className="relative">
+                    <button
+                      onClick={() => setNotificationMenuOpen((open) => !open)}
+                      className="p-2 rounded-lg hover:bg-ink-100 transition-colors relative"
+                      aria-label={unreadNotificationCount ? `Notifications, ${unreadNotificationCount} unread` : 'Notifications'}
+                      title="Notifications"
+                    >
+                      <Bell className={cn('w-5 h-5', notificationMenuOpen ? 'text-terracotta-600' : 'text-ink-700')} />
+                      {unreadNotificationCount > 0 && (
+                        <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 bg-terracotta-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                          {unreadNotificationCount}
+                        </span>
+                      )}
+                    </button>
+                    {notificationMenuOpen && (
+                      <div className="absolute right-0 top-full mt-2 w-80 max-w-[calc(100vw-2rem)] bg-white rounded-xl shadow-lg border border-ink-100 py-2">
+                        <p className="px-4 py-2 text-sm font-medium text-ink-900 border-b border-ink-100">Notifications</p>
+                        {notificationError && (
+                          <p role="alert" className="px-4 py-3 text-xs text-terracotta-600">{notificationError}</p>
+                        )}
+                        {!notificationError && notifications.length === 0 && (
+                          <p className="px-4 py-3 text-xs text-ink-500">You’re all caught up.</p>
+                        )}
+                        {notifications.map((notification) => (
+                          <button
+                            key={notification.id}
+                            onClick={() => void openNotification(notification)}
+                            className={cn(
+                              'w-full text-left px-4 py-3 hover:bg-ink-50 transition-colors',
+                              !notification.read_at && 'bg-terracotta-50/60',
+                            )}
+                          >
+                            <span className="block text-sm font-medium text-ink-900">{notification.title}</span>
+                            <span className="block mt-1 text-xs text-ink-500">{notification.body}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => navigate({ name: 'messages' })}
+                    className="p-2 rounded-lg hover:bg-ink-100 transition-colors"
+                    aria-label="Messages"
+                    title="Messages"
+                  >
+                    <MessageCircle className={cn('w-5 h-5', isActive('messages') ? 'text-terracotta-600' : 'text-ink-700')} />
+                  </button>
+                </>
               )}
 
               {user ? (
@@ -163,6 +283,9 @@ export function Header() {
                       </MenuItem>
                       <MenuItem icon={<Package className="w-4 h-4" />} onClick={() => navigate({ name: 'orders' })}>
                         My Orders
+                      </MenuItem>
+                      <MenuItem icon={<ArrowLeftRight className="w-4 h-4" />} onClick={() => navigate({ name: 'trades' })}>
+                        My Trades
                       </MenuItem>
                       <MenuItem icon={<MessageCircle className="w-4 h-4" />} onClick={() => navigate({ name: 'messages' })}>
                         Messages
@@ -240,6 +363,9 @@ export function Header() {
               </MobileNavLink>
               <MobileNavLink onClick={() => navigate({ name: 'orders' })} icon={<Package className="w-4 h-4" />}>
                 My Orders
+              </MobileNavLink>
+              <MobileNavLink onClick={() => navigate({ name: 'trades' })} icon={<ArrowLeftRight className="w-4 h-4" />}>
+                My Trades
               </MobileNavLink>
               <MobileNavLink onClick={() => navigate({ name: 'vouchers' })} icon={<Tag className="w-4 h-4" />}>
                 Promo Codes

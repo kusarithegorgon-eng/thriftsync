@@ -71,6 +71,7 @@ export function SellPage() {
   const [listingCondition, setListingCondition] = useState('');
   const [listingMaterial, setListingMaterial] = useState('');
   const [listingType, setListingType] = useState<'fixed' | 'auction'>('fixed');
+  const [barterEnabled, setBarterEnabled] = useState(false);
   const [auctionMode, setAuctionMode] = useState<'ENGLISH' | 'DUTCH'>('ENGLISH');
   const [auctionDays, setAuctionDays] = useState('7');
   const [incrementStep, setIncrementStep] = useState('');
@@ -343,6 +344,7 @@ export function SellPage() {
         images: imageUrls,
         image_metadata: imageMeta,
         listing_type: listingType,
+        barter_enabled: listingType === 'fixed' && barterEnabled,
         auction_mode: isAuction ? auctionMode : 'ENGLISH',
         auction_duration_days: isAuction ? durationDays : null,
         auction_end_at: isAuction ? new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString() : null,
@@ -673,6 +675,23 @@ export function SellPage() {
                 </select>
               </div>
             </div>
+
+            {listingType === 'fixed' && (
+              <label className="flex items-start gap-3 rounded-lg border border-ink-200 p-3">
+                <input
+                  type="checkbox"
+                  checked={barterEnabled}
+                  onChange={(event) => setBarterEnabled(event.target.checked)}
+                  className="mt-0.5 accent-ink-900"
+                />
+                <span>
+                  <span className="block text-sm font-medium text-ink-800">Accept barter offers</span>
+                  <span className="mt-0.5 block text-xs text-ink-500">
+                    Other sellers may offer one of their own barter-enabled items. No cash top-ups.
+                  </span>
+                </span>
+              </label>
+            )}
 
             {listingType === 'auction' && (
               <div className="border border-ink-200 rounded-xl p-4 space-y-3 animate-slide-down">
