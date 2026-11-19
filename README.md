@@ -35,6 +35,10 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    your support inbox rather than a value supplied by the form. Seller order
    emails require a separate transaction template configured with a dynamic
    `{{to_email}}` recipient and the buyer/order variables described below.
+   For a hosted frontend, configure `VITE_PAYMONGO_PUBLIC_KEY` in the hosting
+   provider's build environment too, then rebuild/redeploy the frontend.
+   Do not add it as a Supabase Edge Function secret; the secret key belongs
+   there instead.
 3. In Supabase Dashboard, open Authentication settings and enable email
    confirmations. In the Confirm signup email template, include Supabase's
    `{{ .Token }}` value so users receive an eight-digit one-time code. The EmailJS template
