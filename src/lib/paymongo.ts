@@ -46,6 +46,20 @@ export async function createPaymongoCheckout(input: PaymongoCreateInput) {
   return data as { checkout_url: string; checkout_session_id: string };
 }
 
+export async function createAuctionPaymongoCheckout(input: {
+  order_id: string;
+  success_url: string;
+  cancel_url: string;
+}) {
+  const { data, error } = await supabase.functions.invoke('paymongo-checkout', {
+    body: { action: 'create_auction_payment', ...input },
+  });
+  if (error || !data?.checkout_url || !data?.checkout_session_id) {
+    throw invokeError(error, data, 'Unable to start the auction payment. Try again or contact support.');
+  }
+  return data as { checkout_url: string; checkout_session_id: string };
+}
+
 export async function confirmPaymongoCheckout(checkoutSessionId: string) {
   const { data, error } = await supabase.functions.invoke('paymongo-checkout', {
     body: { action: 'confirm', checkout_session_id: checkoutSessionId },
@@ -54,6 +68,16 @@ export async function confirmPaymongoCheckout(checkoutSessionId: string) {
     throw invokeError(error, data, 'PayMongo payment could not be confirmed.');
   }
   return data as PaymongoConfirmResult;
+}
+
+export async function cancelPaymongoCheckout(checkoutSessionId: string) {
+  const { data, error } = await supabase.functions.invoke('paymongo-checkout', {
+    body: { action: 'cancel', checkout_session_id: checkoutSessionId },
+  });
+  if (error || !data?.success) {
+    throw invokeError(error, data, 'PayMongo checkout could not be safely cancelled.');
+  }
+  return data as { success: true; cancelled?: boolean; order_already_created?: boolean; order_ids?: string[] };
 }
 
 export async function simulateGcashCheckout(input: Omit<PaymongoCreateInput, 'payment_method' | 'success_url' | 'cancel_url'>) {

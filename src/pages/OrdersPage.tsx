@@ -1,14 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Package, Truck, CheckCircle, CheckCircle2, Clock, KeyRound, Star, Gavel, MessageCircle } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { supabase, type Order, type Listing, type Boutique, type LockerHandoff, type LockerLocation } from '@/lib/supabase';
 import { formatPrice, formatTimeAgo, cn } from '@/lib/utils';
+import { cancelPaymongoCheckout, confirmPaymongoCheckout, createAuctionPaymongoCheckout } from '@/lib/paymongo';
 
 type OrderWithDetails = Order & {
   listings: Pick<Listing, 'id' | 'title' | 'images' | 'listing_type'> | null;
   boutiques: Pick<Boutique, 'id' | 'name' | 'slug'> | null;
 };
+
+const AUCTION_PAYMENT_SESSION_KEY = 'thriftsync-auction-payment-session';
 
 export function OrdersPage() {
   const { navigate } = useRouter();
@@ -26,6 +29,9 @@ export function OrdersPage() {
   const [reviewRatings, setReviewRatings] = useState<Record<string, { accuracy: number; communication: number; punctuality: number }>>({});
   const [reviewBodies, setReviewBodies] = useState<Record<string, string>>({});
   const [reviewSubmittingId, setReviewSubmittingId] = useState<string | null>(null);
+  const [auctionPaymentLoadingId, setAuctionPaymentLoadingId] = useState<string | null>(null);
+  const [auctionPaymentErrors, setAuctionPaymentErrors] = useState<Record<string, string>>({});
+  const auctionPaymentReturnHandled = useRef(false);
 
   useEffect(() => {
     async function load() {
@@ -87,6 +93,83 @@ export function OrdersPage() {
     }
     if (!authLoading) load();
   }, [user, authLoading]);
+
+  useEffect(() => {
+    if (!user || auctionPaymentReturnHandled.current) return;
+    const query = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    const paymentStatus = query.get('auction_payment');
+    if (paymentStatus !== 'success' && paymentStatus !== 'cancel') return;
+
+    auctionPaymentReturnHandled.current = true;
+    let session: { order_id: string; checkout_session_id: string } | null = null;
+    try {
+      const saved = sessionStorage.getItem(AUCTION_PAYMENT_SESSION_KEY);
+      session = saved ? JSON.parse(saved) as { order_id: string; checkout_session_id: string } : null;
+    } catch {
+      session = null;
+    }
+
+    if (!session?.order_id || !session.checkout_session_id) {
+      setLoadError('Could not verify the auction payment session. Open My Orders and refresh the order status.');
+      return;
+    }
+
+    void (async () => {
+      setAuctionPaymentErrors((current) => ({ ...current, [session!.order_id]: '' }));
+      try {
+        if (paymentStatus === 'cancel') {
+          const result = await cancelPaymongoCheckout(session.checkout_session_id);
+          if (result.order_already_created && result.order_ids?.includes(session.order_id)) {
+            setOrders((current) => current.map((order) => order.id === session!.order_id
+              ? { ...order, status: 'escrow_held', payment_method: 'paymongo', payment_due_at: null, paid_at: new Date().toISOString() }
+              : order));
+          } else {
+            setAuctionPaymentErrors((current) => ({
+              ...current,
+              [session!.order_id]: 'Payment was cancelled. You can try again before the deadline.',
+            }));
+          }
+          sessionStorage.removeItem(AUCTION_PAYMENT_SESSION_KEY);
+          return;
+        }
+
+        const result = await confirmPaymongoCheckout(session.checkout_session_id);
+        sessionStorage.removeItem(AUCTION_PAYMENT_SESSION_KEY);
+        setOrders((current) => current.map((order) => result.order_ids?.includes(order.id)
+          ? { ...order, status: 'escrow_held', payment_method: 'paymongo', payment_due_at: null, paid_at: new Date().toISOString() }
+          : order));
+      } catch (error) {
+        setAuctionPaymentErrors((current) => ({
+          ...current,
+          [session!.order_id]: error instanceof Error ? error.message : 'Could not verify the auction payment.',
+        }));
+      }
+    })();
+  }, [user]);
+
+  async function payAuctionOrder(order: OrderWithDetails) {
+    setAuctionPaymentLoadingId(order.id);
+    setAuctionPaymentErrors((current) => ({ ...current, [order.id]: '' }));
+    try {
+      const returnUrl = `${window.location.origin}${window.location.pathname}#/orders`;
+      const checkout = await createAuctionPaymongoCheckout({
+        order_id: order.id,
+        success_url: `${returnUrl}?auction_payment=success`,
+        cancel_url: `${returnUrl}?auction_payment=cancel`,
+      });
+      sessionStorage.setItem(AUCTION_PAYMENT_SESSION_KEY, JSON.stringify({
+        order_id: order.id,
+        checkout_session_id: checkout.checkout_session_id,
+      }));
+      window.location.assign(checkout.checkout_url);
+    } catch (error) {
+      setAuctionPaymentErrors((current) => ({
+        ...current,
+        [order.id]: error instanceof Error ? error.message : 'Could not start auction payment.',
+      }));
+      setAuctionPaymentLoadingId(null);
+    }
+  }
 
   async function confirmDelivery(orderId: string) {
     setDeliveryActionId(orderId);
@@ -309,6 +392,33 @@ export function OrdersPage() {
                       </button>
                     </div>
                   )}
+                  {order.listings?.listing_type === 'auction' && order.status === 'pending_payment' && (
+                    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                      <p className="text-xs font-semibold text-amber-900">Payment required to secure your win</p>
+                      <p className="mt-1 text-xs text-amber-800">
+                        Pay {formatPrice(Number(order.amount))} by {order.payment_due_at
+                          ? new Date(order.payment_due_at).toLocaleString()
+                          : 'the 24-hour deadline'}.
+                        If unpaid, this order expires and the seller may relist the item.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void payAuctionOrder(order)}
+                        disabled={auctionPaymentLoadingId === order.id}
+                        className="btn-primary mt-2 text-xs"
+                      >
+                        {auctionPaymentLoadingId === order.id ? 'Opening PayMongo…' : 'Pay with PayMongo'}
+                      </button>
+                      {auctionPaymentErrors[order.id] && (
+                        <p role="alert" className="mt-2 text-xs text-terracotta-700">{auctionPaymentErrors[order.id]}</p>
+                      )}
+                    </div>
+                  )}
+                  {order.listings?.listing_type === 'auction' && order.status === 'payment_expired' && (
+                    <p className="mt-3 rounded-lg border border-ink-200 bg-ink-50 p-3 text-xs text-ink-600">
+                      The 24-hour auction payment window expired. The seller may relist this item.
+                    </p>
+                  )}
                   {order.payment_is_simulated && (
                     <p className="mt-2 text-xs font-medium text-gold-700">
                       GCash demo only — no payment was collected.
@@ -502,6 +612,8 @@ export function OrdersPage() {
 
 function OrderStatusBadge({ status, paymentMethod }: { status: string; paymentMethod: string }) {
   const config: Record<string, { label: string; className: string }> = {
+    pending_payment: { label: 'Payment Required', className: 'bg-amber-50 text-amber-800 border border-amber-200' },
+    payment_expired: { label: 'Payment Expired', className: 'bg-ink-100 text-ink-600 border border-ink-200' },
     escrow_held: paymentMethod === 'cash_on_delivery'
       ? { label: 'Pay on receipt', className: 'bg-blue-50 text-blue-700 border border-blue-200' }
       : { label: 'In Escrow', className: 'bg-gold-50 text-gold-700 border border-gold-200' },

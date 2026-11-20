@@ -25,6 +25,11 @@ export function DashboardPage() {
   const [selectedAuction, setSelectedAuction] = useState<Listing | null>(null);
   const [barterUpdatingId, setBarterUpdatingId] = useState<string | null>(null);
   const [barterErrors, setBarterErrors] = useState<Record<string, string>>({});
+  const [auctionActionErrors, setAuctionActionErrors] = useState<Record<string, string>>({});
+  const [moderationUpdates, setModerationUpdates] = useState<Record<string, {
+    action: string; notes: string | null; hide_until: string | null;
+  }>>({});
+  const [moderationNoticeError, setModerationNoticeError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -48,7 +53,35 @@ export function DashboardPage() {
           .select('*')
           .eq('boutique_id', (boutiqueData as Boutique).id)
           .order('created_at', { ascending: false });
-        setListings((listingData as Listing[]) || []);
+        const sellerListings = (listingData as Listing[]) || [];
+        setListings(sellerListings);
+        const listingIds = sellerListings.map((listing) => listing.id);
+        if (listingIds.length > 0) {
+          const { data: actionData, error: actionError } = await supabase
+            .from('moderation_actions')
+            .select('listing_id, action, notes, hide_until')
+            .in('listing_id', listingIds)
+            .in('action', ['warning', 'correction_request', 'temporary_hide', 'restore', 'temporary_hide_expired'])
+            .order('created_at', { ascending: false });
+          if (actionError) {
+            setModerationNoticeError(`Could not load moderator updates: ${actionError.message}`);
+          } else {
+            const latestUpdates: Record<string, { action: string; notes: string | null; hide_until: string | null }> = {};
+            (actionData || []).forEach((action) => {
+              if (action.listing_id && !latestUpdates[action.listing_id]) {
+                latestUpdates[action.listing_id] = {
+                  action: action.action,
+                  notes: action.notes,
+                  hide_until: action.hide_until,
+                };
+              }
+            });
+            setModerationUpdates(latestUpdates);
+            setModerationNoticeError(null);
+          }
+        } else {
+          setModerationUpdates({});
+        }
 
         const { data: orderData } = await supabase
           .from('orders')
@@ -144,6 +177,26 @@ export function DashboardPage() {
     }
   }
 
+  async function cancelAuctionListing(listing: Listing) {
+    setAuctionActionErrors((current) => ({ ...current, [listing.id]: '' }));
+    try {
+      const { data, error } = await supabase.rpc('cancel_auction_listing', {
+        p_listing_id: listing.id,
+      });
+      if (error) throw error;
+      const result = data?.[0];
+      if (!result?.success) throw new Error(result?.message || 'Could not cancel this auction.');
+      setListings((current) => current.map((item) => item.id === listing.id
+        ? { ...item, status: 'draft' }
+        : item));
+    } catch (error) {
+      setAuctionActionErrors((current) => ({
+        ...current,
+        [listing.id]: error instanceof Error ? error.message : 'Could not cancel this auction.',
+      }));
+    }
+  }
+
   function shareListing(listing: Listing, platform: 'facebook' | 'x') {
     if (!boutique) return;
     const listingUrl = `${window.location.origin}${window.location.pathname}#/listing/${encodeURIComponent(listing.id)}`;
@@ -230,7 +283,13 @@ export function DashboardPage() {
                   <button onClick={() => navigate({ name: 'sell' })} className="btn-secondary">Create your first listing</button>
                 </div>
               ) : (
-                listings.map((listing) => (
+                <>
+                {moderationNoticeError && (
+                  <p role="alert" className="px-3 py-2 text-xs text-terracotta-700">
+                    {moderationNoticeError}
+                  </p>
+                )}
+                {listings.map((listing) => (
                   <div key={listing.id} className="p-3 flex items-center gap-3 hover:bg-ink-50 transition-colors">
                     <div className="w-12 h-14 rounded-lg overflow-hidden bg-ink-100 shrink-0">
                       {listing.images && listing.images[0] && (
@@ -260,20 +319,49 @@ export function DashboardPage() {
                           <Eye className="w-2.5 h-2.5" />{listing.views}
                         </span>
                       </div>
+                      {listing.moderation_note && (
+                        <p className="mt-1 line-clamp-2 text-[10px] text-terracotta-700">
+                          Moderator update: {listing.moderation_note}
+                        </p>
+                      )}
+                      {moderationUpdates[listing.id] && (
+                        <p className="mt-1 line-clamp-2 text-[10px] text-terracotta-700">
+                          {moderationUpdates[listing.id].action.replace(/_/g, ' ')}
+                          {moderationUpdates[listing.id].notes && `: ${moderationUpdates[listing.id].notes}`}
+                          {moderationUpdates[listing.id].hide_until
+                            && ` · Until ${new Date(moderationUpdates[listing.id].hide_until!).toLocaleString()}`}
+                        </p>
+                      )}
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-2">
                       <p className="text-sm font-semibold text-ink-900">{formatPrice(Number(listing.price))}</p>
                       {listing.status === 'active' && (
                         <div className="flex items-center gap-1">
                           {listing.listing_type === 'auction' && (
-                            <button
-                              type="button"
-                              onClick={() => setSelectedAuction(listing)}
-                              aria-label={`View live bidders for ${listing.title}`}
-                              className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-medium text-terracotta-700 hover:bg-terracotta-50"
-                            >
-                              <Gavel className="h-3 w-3" /> Live bidders
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedAuction(listing)}
+                                aria-label={`View live bidders for ${listing.title}`}
+                                className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-medium text-terracotta-700 hover:bg-terracotta-50"
+                              >
+                                <Gavel className="h-3 w-3" /> Live bidders
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const message = listing.auction_mode === 'ENGLISH'
+                                    ? 'Cancel this English auction? This is only allowed before the first bid.'
+                                    : 'Cancel this Dutch auction before a buyer claims it?';
+                                  if (window.confirm(message)) {
+                                    void cancelAuctionListing(listing);
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-medium text-ink-600 hover:bg-ink-100"
+                              >
+                                Cancel auction
+                              </button>
+                            </>
                           )}
                           {listing.listing_type === 'fixed' && (
                             <button
@@ -315,9 +403,15 @@ export function DashboardPage() {
                           {barterErrors[listing.id]}
                         </p>
                       )}
+                      {auctionActionErrors[listing.id] && (
+                        <p role="alert" className="max-w-40 text-right text-[10px] text-terracotta-600">
+                          {auctionActionErrors[listing.id]}
+                        </p>
+                      )}
                     </div>
                   </div>
-                ))
+                ))}
+                </>
               )}
             </div>
           </div>

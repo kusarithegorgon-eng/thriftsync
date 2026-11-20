@@ -102,6 +102,8 @@ export function Header() {
 
   const isActive = (name: string) => route.name === name;
   const unreadNotificationCount = notifications.filter((notification) => !notification.read_at).length;
+  const canAccessModeration = profile?.role === 'admin' || profile?.role === 'moderator';
+  const moderationLinkLabel = profile?.role === 'admin' ? 'Admin' : 'Moderation';
 
   return (
     <>
@@ -157,9 +159,9 @@ export function Header() {
               <NavLink active={isActive('dashboard')} onClick={() => navigate({ name: 'dashboard' })}>
                 Dashboard
               </NavLink>
-              {profile?.role === 'admin' && (
+              {canAccessModeration && (
                 <NavLink active={isActive('admin')} onClick={() => navigate({ name: 'admin' })}>
-                  Admin
+                  {moderationLinkLabel}
                 </NavLink>
               )}
             </nav>
@@ -296,9 +298,9 @@ export function Header() {
                       <MenuItem icon={<Heart className="w-4 h-4" />} onClick={() => navigate({ name: 'wishlist' })}>
                         Wishlist
                       </MenuItem>
-                      {profile?.role === 'admin' && (
+                      {canAccessModeration && (
                         <MenuItem icon={<ShieldCheck className="w-4 h-4" />} onClick={() => navigate({ name: 'admin' })}>
-                          Admin Moderation
+                          {profile?.role === 'admin' ? 'System Administration' : 'Content Moderation'}
                         </MenuItem>
                       )}
                       <div className="border-t border-ink-100 mt-1 pt-1">
@@ -370,9 +372,9 @@ export function Header() {
               <MobileNavLink onClick={() => navigate({ name: 'vouchers' })} icon={<Tag className="w-4 h-4" />}>
                 Promo Codes
               </MobileNavLink>
-              {profile?.role === 'admin' && (
+              {canAccessModeration && (
                 <MobileNavLink onClick={() => navigate({ name: 'admin' })} icon={<ShieldCheck className="w-4 h-4" />}>
-                  Admin Moderation
+                  {profile?.role === 'admin' ? 'System Administration' : 'Content Moderation'}
                 </MobileNavLink>
               )}
               {!user && (

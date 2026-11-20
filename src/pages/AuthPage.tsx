@@ -6,10 +6,21 @@ import { cn } from '@/lib/utils';
 
 export function AuthPage() {
   const { navigate } = useRouter();
-  const { user, signIn, signUp, verifySignupOtp, resendSignupOtp } = useAuth();
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const {
+    user,
+    passwordRecovery,
+    signIn,
+    signUp,
+    requestPasswordReset,
+    updatePassword,
+    clearPasswordRecovery,
+    verifySignupOtp,
+    resendSignupOtp,
+  } = useAuth();
+  const [mode, setMode] = useState<'signin' | 'signup' | 'reset'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [role, setRole] = useState<'buyer' | 'seller'>('buyer');
   const [awaitingOtp, setAwaitingOtp] = useState(false);
@@ -32,6 +43,33 @@ export function AuthPage() {
       const { error: verificationError } = await verifySignupOtp(email, otp);
       if (verificationError) setError(verificationError);
       else navigate({ name: 'home' });
+      setLoading(false);
+      return;
+    }
+
+    if (passwordRecovery) {
+      if (password !== confirmPassword) {
+        setError('The passwords do not match.');
+        setLoading(false);
+        return;
+      }
+      const { error: updateError } = await updatePassword(password);
+      if (updateError) setError(updateError);
+      else {
+        clearPasswordRecovery();
+        setPassword('');
+        setConfirmPassword('');
+        setNotice('Your password has been updated.');
+        navigate({ name: 'home' });
+      }
+      setLoading(false);
+      return;
+    }
+
+    if (mode === 'reset') {
+      const { error: resetError } = await requestPasswordReset(email);
+      if (resetError) setError(resetError);
+      else setNotice('If an account exists for that email, a password reset link will be sent.');
       setLoading(false);
       return;
     }
@@ -69,18 +107,32 @@ export function AuthPage() {
             <Gavel className="w-7 h-7 text-cream" strokeWidth={2.2} />
           </div>
           <h1 className="font-serif text-2xl font-bold text-ink-900">
-            {awaitingOtp ? 'Verify your email' : mode === 'signin' ? 'Welcome back' : 'Join ThriftSync'}
+            {awaitingOtp
+              ? 'Verify your email'
+              : passwordRecovery
+                ? 'Choose a new password'
+                : mode === 'signin'
+                  ? 'Welcome back'
+                  : mode === 'reset'
+                    ? 'Reset your password'
+                    : 'Join ThriftSync'}
           </h1>
           <p className="text-sm text-ink-500 mt-1">
             {awaitingOtp
-              ? 'Enter the eight-digit code or open the confirmation link in your email to finish creating your account.'
-              : mode === 'signin' ? 'Sign in to your account to continue' : 'Create an account to start buying and selling'}
+              ? 'Enter the one-time code or open the confirmation link in your email to finish creating your account.'
+              : passwordRecovery
+                ? 'Enter and confirm a new password for your account.'
+                : mode === 'signin'
+                  ? 'Sign in to your account to continue'
+                  : mode === 'reset'
+                    ? 'We will email you a secure password reset link.'
+                    : 'Create an account to start buying and selling'}
           </p>
         </div>
 
         <div className="card p-6">
           {/* Mode toggle */}
-          {!awaitingOtp && <div className="flex gap-1 p-1 bg-ink-50 rounded-lg mb-5">
+          {!awaitingOtp && !passwordRecovery && mode !== 'reset' && <div className="flex gap-1 p-1 bg-ink-50 rounded-lg mb-5">
             <button
               onClick={() => setMode('signin')}
               className={cn(
@@ -111,11 +163,10 @@ export function AuthPage() {
                     type="text"
                     inputMode="numeric"
                     autoComplete="one-time-code"
-                    pattern="[0-9]{8}"
-                    maxLength={8}
+                    maxLength={10}
                     value={otp}
-                    onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 8))}
-                    placeholder="8-digit code"
+                    onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 10))}
+                    placeholder="Enter code"
                     className="input-field text-center font-mono tracking-[0.25em]"
                     required
                   />
@@ -134,7 +185,7 @@ export function AuthPage() {
                   </button>
                 </div>
               </>
-            ) : mode === 'signup' && (
+            ) : !passwordRecovery && mode === 'signup' && (
               <>
                 <div>
                   <label className="text-xs font-medium text-ink-700 mb-1.5 block">Display Name</label>
@@ -179,7 +230,7 @@ export function AuthPage() {
               </>
             )}
 
-            {!awaitingOtp && <div>
+            {!awaitingOtp && !passwordRecovery && <div>
               <label className="text-xs font-medium text-ink-700 mb-1.5 block">Email</label>
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-400" />
@@ -194,16 +245,34 @@ export function AuthPage() {
               </div>
             </div>}
 
-            {!awaitingOtp && <div>
-              <label className="text-xs font-medium text-ink-700 mb-1.5 block">Password</label>
+            {!awaitingOtp && (passwordRecovery || mode !== 'reset') && <div>
+              <label className="text-xs font-medium text-ink-700 mb-1.5 block">
+                {passwordRecovery ? 'New password' : 'Password'}
+              </label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-400" />
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder={passwordRecovery ? 'At least 8 characters' : '••••••••'}
                   className="input-field pl-10"
+                  minLength={passwordRecovery ? 8 : undefined}
+                  required
+                />
+              </div>
+            </div>}
+            {passwordRecovery && <div>
+              <label className="text-xs font-medium text-ink-700 mb-1.5 block">Confirm new password</label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-400" />
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Re-enter your new password"
+                  className="input-field pl-10"
+                  minLength={8}
                   required
                 />
               </div>
@@ -220,11 +289,42 @@ export function AuthPage() {
               disabled={loading}
               className="w-full btn-primary py-3"
             >
-              {loading ? 'Please wait...' : awaitingOtp ? 'Verify email' : mode === 'signin' ? 'Sign In' : 'Create Account'}
+              {loading
+                ? 'Please wait...'
+                : awaitingOtp
+                  ? 'Verify email'
+                  : passwordRecovery
+                    ? 'Update password'
+                    : mode === 'reset'
+                      ? 'Send reset link'
+                      : mode === 'signin'
+                        ? 'Sign In'
+                        : 'Create Account'}
             </button>
+            {!awaitingOtp && !passwordRecovery && notice && (
+              <p role="status" className="text-xs text-sage-700">{notice}</p>
+            )}
           </form>
 
-          {!awaitingOtp && <p className="text-xs text-ink-400 text-center mt-4">
+          {!awaitingOtp && !passwordRecovery && mode === 'signin' && (
+            <button
+              type="button"
+              onClick={() => { setMode('reset'); setError(null); setNotice(null); }}
+              className="mt-4 block w-full text-center text-xs font-medium text-ink-600 hover:text-terracotta-700"
+            >
+              Forgot password?
+            </button>
+          )}
+          {!awaitingOtp && !passwordRecovery && mode === 'reset' && (
+            <button
+              type="button"
+              onClick={() => { setMode('signin'); setError(null); setNotice(null); }}
+              className="mt-4 block w-full text-center text-xs font-medium text-ink-600 hover:text-terracotta-700"
+            >
+              Back to sign in
+            </button>
+          )}
+          {!awaitingOtp && !passwordRecovery && (mode === 'signin' || mode === 'signup') && <p className="text-xs text-ink-400 text-center mt-4">
             {mode === 'signin' ? "Don't have an account? " : 'Already have an account? '}
             <button
               onClick={() => setMode(mode === 'signin' ? 'signup' : 'signin')}

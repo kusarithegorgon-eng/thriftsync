@@ -41,8 +41,9 @@ export function RouterProvider({ children }: { children: ReactNode }) {
 
   function parseAndSet() {
     const hash = window.location.hash.slice(1) || '/';
-    const parts = hash.split('/').filter(Boolean);
-    const params = new URLSearchParams(hash.split('?')[1] || '');
+    const [routePath, queryString = ''] = hash.split('?');
+    const parts = routePath.split('/').filter(Boolean);
+    const params = new URLSearchParams(queryString);
 
     if (parts.length === 0 || parts[0] === '') {
       setRoute({ name: 'home' });

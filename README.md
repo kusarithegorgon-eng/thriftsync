@@ -21,6 +21,12 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    [`one-to-one barter workflow`](./supabase/migrations/20261118110000_complete_one_to_one_barter.sql),
    [`barter messaging`](./supabase/migrations/20261118130000_add_trade_conversations.sql),
    [`cash-on-delivery payment method`](./supabase/migrations/20261118140000_add_cash_on_delivery_payment_method.sql),
+   [`PayMongo inventory reservations`](./supabase/migrations/20261120100000_reserve_inventory_during_paymongo_checkout.sql),
+   [`content moderator roles`](./supabase/migrations/20261120110000_add_content_moderator_role.sql),
+   [`auction payment deadlines`](./supabase/migrations/20261120120000_add_auction_payment_deadlines.sql),
+   [`account recovery and enforcement`](./supabase/migrations/20261120130000_account_recovery_enforcement.sql),
+   [`moderator policy actions`](./supabase/migrations/20261120140000_moderator_policy_actions.sql),
+   [`audit history and admin overview`](./supabase/migrations/20261120150000_audit_history_admin_overview.sql),
    and any later migrations in timestamp order in the Supabase SQL Editor.
 2. Copy `.env.example` to `.env` and set `VITE_SUPABASE_URL` and
    `VITE_SUPABASE_ANON_KEY` from your Supabase project's API settings. The
@@ -41,13 +47,18 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    there instead.
 3. In Supabase Dashboard, open Authentication settings and enable email
    confirmations. In the Confirm signup email template, include Supabase's
-   `{{ .Token }}` value so users receive an eight-digit one-time code. The EmailJS template
+   `{{ .Token }}` value so users receive a one-time code (six digits by default;
+   the length follows your Supabase Auth configuration). The EmailJS template
    ID is separate from Supabase Auth and cannot verify accounts.
+   Add the frontend origin to Supabase Auth's allowed redirect URLs so password
+   recovery links return to the app.
 4. Deploy the `auction-ops` Edge Function in `supabase/functions/auction-ops`
    and set its Supabase secrets as required by that function. Redeploy it after
-   updating the function source. Deploy `supabase/functions/thrift-crawl` for
-   server-calculated Cebu arrival estimates and boutique-hours alerts. Deploy
-   `supabase/functions/paymongo-checkout` the same way, apply
+   updating the function source. Deploy `supabase/functions/thrift-crawl` to
+   the same project as `VITE_SUPABASE_URL` for server-calculated Cebu arrival
+   estimates and boutique-hours alerts, for example
+   `npx supabase functions deploy thrift-crawl --project-ref <project-ref>`.
+   Deploy `supabase/functions/paymongo-checkout` the same way, apply
    [`paymongo_checkouts`](./supabase/migrations/20261031000000_add_paymongo_checkouts.sql),
    and set the PayMongo secret with
    `npx supabase secrets set PAYMONGO_SECRET_KEY=sk_test_...` so the secret never
@@ -69,6 +80,43 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    asks for GCash credentials or collects money, and marks resulting orders as
    simulated. The Edge Function also requires a server-side `sk_test_` key.
    Do not enable it in production.
+
+   PayMongo checkout reserves each listing for 20 minutes before opening the
+   hosted payment page. Deploy the updated `paymongo-checkout` function and
+   apply the inventory-reservation migration. To expire abandoned PayMongo
+   sessions and release their listings automatically, enable `pg_net` and
+   schedule the function once per minute in the Supabase SQL Editor. Store the
+   project's service-role key in Vault (never in source code):
+
+   ```sql
+   CREATE EXTENSION IF NOT EXISTS pg_net;
+   SELECT vault.create_secret(
+     '<project-service-role-key>',
+     'paymongo_checkout_cleanup_service_role_key'
+   );
+   SELECT cron.schedule(
+     'paymongo-checkout-cleanup',
+     '* * * * *',
+     $$
+       SELECT net.http_post(
+         url := 'https://<project-ref>.supabase.co/functions/v1/paymongo-checkout',
+         headers := jsonb_build_object(
+           'Content-Type', 'application/json',
+           'Authorization', 'Bearer ' || (
+             SELECT decrypted_secret
+             FROM vault.decrypted_secrets
+             WHERE name = 'paymongo_checkout_cleanup_service_role_key'
+           )
+         ),
+         body := '{"action":"cleanup_expired"}'::jsonb
+       );
+     $$
+   );
+   ```
+
+   Replace the placeholders before running the SQL. If PayMongo reports an
+   in-progress payment, the function keeps the listing reserved and retries
+   rather than releasing inventory while payment may still succeed.
 
    Seller order emails are sent by the `paymongo-checkout` Edge Function after
    checkout. Create a dedicated EmailJS transaction template (do not reuse a
@@ -127,8 +175,12 @@ and redeploy the `thrift-crawl` function. Restrict the key to the Routes API.
 The provider reorders intermediate stops
 based on route efficiency and returns street geometry and leg estimates; Google
 charges waypoint optimization at the Compute Routes Pro rate. Without this
-secret, the planner continues to use OpenStreetMap street/foot routing in the
-existing stop order. A configured Google API error is shown instead of silently
+secret, the planner uses Valhalla routing backed by OpenStreetMap in the
+existing stop order. It defaults to the public Valhalla endpoint; operators can
+set `VALHALLA_API_URL` on the `thrift-crawl` Edge Function to use another
+compatible endpoint, such as `https://your-host/route`.
+For production traffic, prefer an operator-managed endpoint over the public
+community service. A configured Google API error is shown instead of silently
 switching providers. Live traffic is not included; jeepney travel time is
 approximate and does not represent an official jeepney route. If routing is
 unavailable, the planner hides the route line and labels its local fallback
@@ -151,16 +203,49 @@ the database reject external payment links, phone numbers, and off-escrow
 settlement attempts. Apply the migration before deploying the frontend and
 redeploy the `thrift-crawl` Edge Function when its ETA handler changes.
 
-Create accounts through the app's Sign Up page. To grant an account
-administrator access, update its `profiles.role` to `admin` in the Supabase
-Dashboard after signing up. Sellers can choose English auctions, where buyers
-place ascending bids, or Dutch auctions, where the price descends until a
-buyer claims the item.
+Create accounts through the app's Sign Up page. After applying the content
+moderator migration, bootstrap the first system administrator by setting that
+account's `profiles.role` to `admin` in the Supabase SQL Editor. System
+administrators can assign buyer, seller, moderator, and administrator roles
+from **Admin → Account Roles**; they cannot change their own role. Content
+moderators can review listings and content reports, document decisions, and
+escalate sensitive reports. Refunds, sanctions, and account-role changes remain
+system-administrator actions. Sellers can choose English auctions, where
+buyers place ascending bids, or Dutch auctions, where the price descends until
+a buyer claims the item.
 English auctions are settled automatically after their end time. The highest
-eligible bid (including the reserve-price check) becomes an order, and the winner
-receives an in-app notification linking them to **My Orders** to contact the
-seller and follow delivery or pickup. Settlement runs every minute using
-Supabase's `pg_cron` extension.
+eligible bid (including the reserve-price check; ties go to the earliest bid)
+becomes a payment-pending order. The winner must pay through PayMongo within
+24 hours. Dutch-auction claims use the same payment deadline. Unpaid orders
+expire automatically and the listing returns to draft so the seller can relist
+it. Bids are binding: bidders cannot withdraw them, and an English auction can
+only be cancelled before its first bid; a Dutch auction can be cancelled before
+it is claimed. Auctions ending without an eligible winner return to draft.
+Settled auctions must be relisted as new listings. The settlement and unpaid-order
+expiry jobs run every minute using Supabase's `pg_cron` extension. Deploy the
+updated `paymongo-checkout` Edge Function and schedule the PayMongo cleanup job
+described above so expired payment sessions are checked before unpaid auction
+orders are released.
+
+The account recovery migration adds password reset links and three
+administrator-managed states: active, restricted, and suspended. Restricted
+accounts can still buy and message but cannot sell, bid, claim Dutch auctions,
+or make barter offers; suspended accounts cannot start new marketplace
+actions. Existing orders remain accessible. Time-limited restrictions expire
+automatically, and account decisions are recorded in the administrator audit
+log.
+
+Content moderators can issue documented warnings, request listing corrections,
+temporarily hide approved listings for up to 30 days, restore hidden listings,
+and classify general reports by priority. Temporary hides automatically expire.
+Each action is available in the moderation workspace and recorded in its
+moderator history.
+
+The **Admin → Overview** section summarizes accounts, listings, auctions,
+orders, barter, and open reports. **Audit History** combines administrator
+decisions with inventory and order/payment events. Existing listings and orders
+are recorded as baseline snapshots when the audit migration is applied; later
+changes are captured automatically.
 
 For barter, sellers enable **Accept barter offers** on a fixed-price listing.
 Another seller can offer one of their own barter-enabled listings; offers have

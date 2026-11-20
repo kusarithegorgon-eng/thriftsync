@@ -4,9 +4,14 @@ import { supabase, type Profile } from './supabase';
 type AuthContextValue = {
   user: { id: string; email: string } | null;
   profile: Profile | null;
+  restrictionReason: string | null;
   loading: boolean;
+  passwordRecovery: boolean;
   signUp: (email: string, password: string, displayName: string, role: 'buyer' | 'seller') => Promise<{ error: string | null; verificationRequired: boolean }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  requestPasswordReset: (email: string) => Promise<{ error: string | null }>;
+  updatePassword: (password: string) => Promise<{ error: string | null }>;
+  clearPasswordRecovery: () => void;
   verifySignupOtp: (email: string, token: string) => Promise<{ error: string | null }>;
   resendSignupOtp: (email: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
@@ -18,20 +23,39 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<{ id: string; email: string } | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [restrictionReason, setRestrictionReason] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
 
   async function fetchProfile(userId: string) {
-    const { data, error } = await supabase
+    const profileResult = await supabase
       .from('profiles')
       .select('*')
       .eq('id', userId)
       .maybeSingle();
-
-    if (error) {
-      console.error('Error fetching profile:', error);
+    if (profileResult.error) {
+      console.error('Error fetching profile:', profileResult.error);
       return;
     }
-    if (data) setProfile(data as Profile);
+    if (!profileResult.data) return;
+    const nextProfile = profileResult.data as Profile;
+    setProfile(nextProfile);
+    if (!nextProfile.account_status || nextProfile.account_status === 'active') {
+      setRestrictionReason(null);
+      return;
+    }
+
+    const restrictionResult = await supabase
+      .from('account_restrictions')
+      .select('reason')
+      .eq('profile_id', userId)
+      .maybeSingle();
+    if (restrictionResult.error) {
+      console.error('Error fetching account restriction reason:', restrictionResult.error);
+      setRestrictionReason(null);
+    } else {
+      setRestrictionReason(restrictionResult.data?.reason || null);
+    }
   }
 
   useEffect(() => {
@@ -48,16 +72,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       (async () => {
+        if (event === 'PASSWORD_RECOVERY') setPasswordRecovery(true);
         if (session?.user) {
           setUser({ id: session.user.id, email: session.user.email || '' });
           await fetchProfile(session.user.id);
         } else {
           setUser(null);
           setProfile(null);
+          setRestrictionReason(null);
         }
         if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
+          setRestrictionReason(null);
+          setPasswordRecovery(false);
         }
       })();
     });
@@ -111,10 +139,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: null };
   }
 
+  async function requestPasswordReset(email: string) {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+    return { error: error?.message || null };
+  }
+
+  async function updatePassword(password: string) {
+    const { error } = await supabase.auth.updateUser({ password });
+    return { error: error?.message || null };
+  }
+
+  function clearPasswordRecovery() {
+    setPasswordRecovery(false);
+  }
+
   async function signOut() {
     await supabase.auth.signOut();
     setUser(null);
     setProfile(null);
+    setRestrictionReason(null);
   }
 
   async function refreshProfile() {
@@ -122,7 +167,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signUp, signIn, verifySignupOtp, resendSignupOtp, signOut, refreshProfile }}>
+    <AuthContext.Provider value={{
+      user,
+      profile,
+      restrictionReason,
+      loading,
+      passwordRecovery,
+      signUp,
+      signIn,
+      requestPasswordReset,
+      updatePassword,
+      clearPasswordRecovery,
+      verifySignupOtp,
+      resendSignupOtp,
+      signOut,
+      refreshProfile,
+    }}>
       {children}
     </AuthContext.Provider>
   );

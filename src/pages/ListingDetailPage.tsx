@@ -526,6 +526,9 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                   </form>
                 )}
 
+                <p className="mt-3 text-[10px] leading-relaxed text-ink-500">
+                  Winning bids are binding. The winner must pay through PayMongo within 24 hours; the seller can cancel only before the first bid.
+                </p>
                 {listing.reserve_price && (
                   <p className="text-xs text-ink-500 mt-3">
                     {currentBid >= Number(listing.reserve_price)
@@ -591,7 +594,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                       </p>
                     )}
                     <p className="text-[10px] text-ink-400 text-center">
-                      First to claim wins. Price drops automatically until claimed or floor is reached.
+                      First to claim wins. Pay through PayMongo within 24 hours; otherwise the order expires and the seller may relist the item.
                     </p>
                   </div>
                 )}
@@ -613,7 +616,11 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                   <p className="text-xs text-ink-500 uppercase tracking-wide mb-1">Price</p>
                   <p className="font-serif text-3xl font-bold text-ink-900">{formatPrice(Number(listing.price))}</p>
                   <p className="mt-2 text-sm text-ink-500">
-                    {listing.status === 'exchanged' ? 'This item has been exchanged.' : 'This item is no longer available.'}
+                    {listing.status === 'exchanged'
+                      ? 'This item has been exchanged.'
+                      : listing.status === 'reserved'
+                        ? 'This item is temporarily reserved while another buyer completes checkout.'
+                        : 'This item is no longer available.'}
                   </p>
                 </div>
               )

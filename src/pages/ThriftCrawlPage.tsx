@@ -145,7 +145,10 @@ export function ThriftCrawlPage() {
         });
         if (!active) return;
         if (error) {
-          setEtaError(`Street routing is unavailable; the map will not draw a straight-line route. Local estimates are approximate. ${error.message}`);
+          const errorDetail = error.message.toLowerCase().includes('failed to send a request to the edge function')
+            ? 'Confirm thrift-crawl is deployed to the Supabase project configured in VITE_SUPABASE_URL and allows browser CORS requests.'
+            : error.message;
+          setEtaError(`Street routing is unavailable; the map will not draw a straight-line route. Local estimates are approximate. ${errorDetail}`);
           return;
         }
         if (

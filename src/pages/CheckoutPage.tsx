@@ -8,6 +8,7 @@ import { formatPrice, CEBU_BARANGAYS, isWithinCebu, findNearestBarangay, haversi
 import { CebuMap } from '@/components/CebuMap';
 import {
   PAYMONGO_SESSION_KEY,
+  cancelPaymongoCheckout,
   confirmPaymongoCheckout,
   createCashOnDeliveryOrders,
   createPaymongoCheckout,
@@ -94,8 +95,42 @@ export function CheckoutPage() {
     const paymongoStatus = query.get('paymongo');
     if (paymongoStatus === 'cancel') {
       paymongoReturnHandled.current = true;
-      setCheckoutError('PayMongo checkout was cancelled. Your cart is unchanged.');
-      setStep('review');
+      const stored = sessionStorage.getItem(PAYMONGO_SESSION_KEY);
+      let sessionId = '';
+      try {
+        sessionId = stored ? JSON.parse(stored).checkout_session_id : '';
+      } catch {
+        sessionId = '';
+      }
+      void (async () => {
+        try {
+          if (!sessionId) {
+            setCheckoutError('Could not verify the cancelled PayMongo session. Its reservation will be released automatically after the payment window.');
+          } else {
+            const result = await cancelPaymongoCheckout(sessionId);
+            sessionStorage.removeItem(PAYMONGO_SESSION_KEY);
+            if (result.order_already_created) {
+              clearCart();
+              if (result.order_ids?.length) {
+                const notification = await notifySellerOfOrders(result.order_ids);
+                setSellerEmailNotice(notification.message || (
+                  notification.status === 'sent'
+                    ? 'An email order notice was sent to the seller.'
+                    : 'The order is visible in the seller dashboard, but seller email is not configured.'
+                ));
+              }
+              setStep('complete');
+              return;
+            }
+            setCheckoutError('PayMongo checkout was cancelled. Your cart is unchanged.');
+          }
+        } catch (error) {
+          setCheckoutError(error instanceof Error
+            ? error.message
+            : 'Could not verify the PayMongo cancellation. The item remains reserved while its payment status is checked.');
+        }
+        setStep((currentStep) => currentStep === 'complete' ? currentStep : 'review');
+      })();
       return;
     }
     if (paymongoStatus !== 'success') return;
@@ -798,7 +833,7 @@ export function CheckoutPage() {
                     ? <>Pay <strong>{formatPrice(finalTotal)}</strong> directly to the seller or courier when your item arrives. No online payment is collected.</>
                     : paymentMode === 'gcash_demo'
                       ? <>This GCash demo records <strong>{formatPrice(finalTotal)}</strong> as a simulated payment. No money is collected.</>
-                      : <>Pay <strong>{formatPrice(finalTotal)}</strong> online with GCash through PayMongo{isPaymongoTestMode ? ' (test mode)' : ''}.</>}
+                      : <>Pay <strong>{formatPrice(finalTotal)}</strong> online with GCash through PayMongo{isPaymongoTestMode ? ' (test mode)' : ''}. Items are reserved for 20 minutes while you complete payment.</>}
                 </p>
               </div>
 

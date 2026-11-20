@@ -27,8 +27,12 @@ type CrawlStop = CrawlPoint & {
   boutique_name?: string;
   operating_hours?: Record<string, string>;
 };
+type ValhallaLeg = { summary: { length: number; time: number }; shape: string };
+type ValhallaResponse = {
+  trip?: { status?: number; status_message?: string; legs?: ValhallaLeg[] };
+};
 
-function decodeGooglePolyline(encoded: string): [number, number][] {
+function decodePolyline(encoded: string, precision: number): [number, number][] {
   const coordinates: [number, number][] = [];
   let index = 0;
   let lat = 0;
@@ -42,11 +46,11 @@ function decodeGooglePolyline(encoded: string): [number, number][] {
       let chunk: number;
       do {
         if (index >= encoded.length || shift > 30) {
-          throw new Error("Google Routes returned an invalid polyline.");
+          throw new Error("Routing service returned an invalid polyline.");
         }
         chunk = encoded.charCodeAt(index++) - 63;
         if (chunk < 0 || chunk > 63) {
-          throw new Error("Google Routes returned an invalid polyline.");
+          throw new Error("Routing service returned an invalid polyline.");
         }
         result |= (chunk & 0x1f) << shift;
         shift += 5;
@@ -55,7 +59,7 @@ function decodeGooglePolyline(encoded: string): [number, number][] {
     }
     lat += deltas[0];
     lng += deltas[1];
-    coordinates.push([lat / 1e5, lng / 1e5]);
+    coordinates.push([lat / 10 ** precision, lng / 10 ** precision]);
   }
   return coordinates;
 }
@@ -308,7 +312,7 @@ Deno.serve(async (req: Request) => {
         const route = googleResult?.routes?.[0];
         const legs = route?.legs;
         const routeCoordinates = typeof route?.polyline?.encodedPolyline === "string"
-          ? decodeGooglePolyline(route.polyline.encodedPolyline)
+          ? decodePolyline(route.polyline.encodedPolyline, 5)
           : [];
         const expectedLegCount = points.length - 1;
         if (
@@ -423,31 +427,114 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      const routingProfile = mode === "walking" ? "routed-foot" : "routed-car";
-      const coordinates = points.map((point) => `${point.lng},${point.lat}`).join(";");
-      const routeResponse = await fetch(
-        `https://routing.openstreetmap.de/${routingProfile}/route/v1/driving/${coordinates}?overview=full&geometries=geojson&steps=false`,
-        { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(10000) },
-      );
-      if (!routeResponse.ok) {
+      const costing = mode === "walking"
+        ? "pedestrian"
+        : mode === "motorbike"
+          ? "motorcycle"
+          : "auto";
+      const valhallaUrl = Deno.env.get("VALHALLA_API_URL")
+        || "https://valhalla1.openstreetmap.de/route";
+      let valhallaResponse: Response;
+      try {
+        valhallaResponse = await fetch(valhallaUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({
+            locations: points.map((point) => ({
+              lat: point.lat,
+              lon: point.lng,
+              type: "break",
+            })),
+            costing,
+            costing_options: {
+              auto: { use_highways: 0.5, use_tolls: 0.0 },
+              motorcycle: { use_highways: 0.5, use_tolls: 0.0 },
+            },
+            units: "km",
+            language: "en-US",
+            shape_format: "polyline6",
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+      } catch (error) {
         return new Response(
-          JSON.stringify({ error: `Road routing service returned ${routeResponse.status}.` }),
+          JSON.stringify({
+            error: `Valhalla routing request failed: ${error instanceof Error ? error.message : "network error"}`,
+          }),
           { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
-      const routeResult = await routeResponse.json();
-      const route = routeResult.routes?.[0];
+      let valhallaResult: ValhallaResponse;
+      try {
+        valhallaResult = await valhallaResponse.json();
+      } catch {
+        return new Response(
+          JSON.stringify({ error: "Valhalla returned an invalid response." }),
+          { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      const valhallaRoute = valhallaResult.trip;
+      const valhallaLegs = valhallaRoute?.legs;
+      if (!valhallaResponse.ok) {
+        return new Response(
+          JSON.stringify({
+            error: valhallaRoute?.status_message
+              || `Valhalla routing service returned ${valhallaResponse.status}.`,
+          }),
+          { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
       if (
-        routeResult.code !== "Ok"
-        || !Array.isArray(route?.geometry?.coordinates)
-        || !Array.isArray(route?.legs)
-        || route.legs.length !== Math.max(0, points.length - 1)
+        valhallaRoute?.status !== 0
+        || !Array.isArray(valhallaLegs)
+        || valhallaLegs.length !== points.length - 1
+        || !valhallaLegs.every((leg: ValhallaLeg) =>
+          Number.isFinite(leg.summary?.length)
+          && Number.isFinite(leg.summary?.time)
+          && typeof leg.shape === "string"
+        )
       ) {
         return new Response(
-          JSON.stringify({ error: "No walkable or drivable route was found between the selected locations." }),
+          JSON.stringify({
+            error: valhallaRoute?.status_message
+              || "Valhalla could not find a route between the selected locations.",
+          }),
           { status: 422, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
+      let routeCoordinates: [number, number][];
+      try {
+        routeCoordinates = valhallaLegs.flatMap(
+          (leg: ValhallaLeg, index: number) => {
+            const legCoordinates = decodePolyline(leg.shape, 6);
+            return index === 0 ? legCoordinates : legCoordinates.slice(1);
+          },
+        );
+      } catch (error) {
+        return new Response(
+          JSON.stringify({
+            error: error instanceof Error ? error.message : "Valhalla returned an invalid route shape.",
+          }),
+          { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      if (routeCoordinates.length < 2) {
+        return new Response(
+          JSON.stringify({ error: "Valhalla returned an incomplete route geometry." }),
+          { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      const route = {
+        distance: valhallaLegs.reduce(
+          (total: number, leg: ValhallaLeg) => total + leg.summary.length,
+          0,
+        ) * 1000,
+        legs: valhallaLegs.map((leg: ValhallaLeg) => ({
+          distance: leg.summary.length * 1000,
+          duration: leg.summary.time,
+        })),
+        geometry: { coordinates: routeCoordinates.map(([lat, lng]) => [lng, lat]) },
+      };
 
       const formatter = new Intl.DateTimeFormat("en-US", {
         timeZone: "Asia/Manila",
@@ -510,7 +597,7 @@ Deno.serve(async (req: Request) => {
           estimated_total_time_minutes: Math.round(totalEstimatedMinutes),
           total_route_distance_km: route.distance / 1000,
           route_coordinates: route.geometry.coordinates,
-          route_provider: "OpenStreetMap",
+          route_provider: "Valhalla (OpenStreetMap)",
           waypoint_optimization: false,
           traffic_included: false,
           timezone: "Asia/Manila",

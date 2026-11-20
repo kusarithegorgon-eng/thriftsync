@@ -32,6 +32,7 @@ function toCentavos(pesos: number) {
 }
 
 function isPaidSession(session: Record<string, unknown>) {
+  if (!session || typeof session !== "object") return false;
   const attributes = (session.attributes || session) as Record<string, unknown>;
   const paymentIntent = attributes.payment_intent as { status?: string } | undefined;
   if (attributes.status === "paid" || paymentIntent?.status === "succeeded") {
@@ -44,6 +45,84 @@ function isPaidSession(session: Record<string, unknown>) {
   });
 }
 
+async function retrievePaymongoSession(secretKey: string, checkoutSessionId: string) {
+  let response = await fetch(`https://api.paymongo.com/v2/checkout_sessions/${checkoutSessionId}`, {
+    headers: {
+      Authorization: paymongoAuthHeader(secretKey),
+      Accept: "application/json",
+    },
+  });
+  let payload = await response.json();
+  if (response.status === 404) {
+    response = await fetch(`https://api.paymongo.com/v1/checkout_sessions/${checkoutSessionId}`, {
+      headers: {
+        Authorization: paymongoAuthHeader(secretKey),
+        Accept: "application/json",
+      },
+    });
+    payload = await response.json();
+  }
+  return { response, payload };
+}
+
+async function expirePaymongoSession(secretKey: string, checkoutSessionId: string) {
+  const response = await fetch(
+    `https://api.paymongo.com/v1/checkout_sessions/${checkoutSessionId}/expire`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: paymongoAuthHeader(secretKey),
+        Accept: "application/json",
+      },
+    },
+  );
+  const payload = await response.json().catch(() => ({}));
+  return { response, payload };
+}
+
+async function fulfillPaidCheckout(
+  adminClient: ReturnType<typeof createClient>,
+  checkoutId: string,
+) {
+  const { data: checkout, error: checkoutError } = await adminClient
+    .from("paymongo_checkouts")
+    .select("payload")
+    .eq("id", checkoutId)
+    .maybeSingle();
+  if (checkoutError) throw new Error(`Could not read the checkout record: ${checkoutError.message}`);
+  if (!checkout) throw new Error("Checkout record not found.");
+
+  const { error: statusError } = await adminClient
+    .from("paymongo_checkouts")
+    .update({ status: "paid", updated_at: new Date().toISOString() })
+    .eq("id", checkoutId)
+    .in("status", ["pending", "paid"]);
+  if (statusError) throw new Error(`Could not record PayMongo payment: ${statusError.message}`);
+
+  const rpcName = checkout.payload?.kind === "auction_payment"
+    ? "fulfill_paymongo_auction_order"
+    : "fulfill_paymongo_checkout";
+  const { data, error } = await adminClient.rpc(rpcName, {
+    p_checkout_id: checkoutId,
+  });
+  if (error) throw new Error(`Payment succeeded, but order fulfillment failed: ${error.message}`);
+  const result = Array.isArray(data) ? data[0] : data;
+  if (!Array.isArray(result?.order_ids) || result.order_ids.length === 0) {
+    throw new Error("Payment succeeded, but no orders were returned for fulfillment.");
+  }
+  return result as { order_ids: string[]; discount_amount: number };
+}
+
+async function deferCheckoutReservation(
+  adminClient: ReturnType<typeof createClient>,
+  checkoutId: string,
+) {
+  const { error } = await adminClient.rpc("extend_paymongo_checkout_reservation", {
+    p_checkout_id: checkoutId,
+  });
+  if (error) throw new Error(`Could not extend the inventory reservation: ${error.message}`);
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return Response.json({ ok: true }, { headers: corsHeaders });
@@ -52,7 +131,158 @@ Deno.serve(async (req: Request) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const body = await req.json();
+    const action = body.action;
+    const secretKey = Deno.env.get("PAYMONGO_SECRET_KEY") || "";
     const authHeader = req.headers.get("Authorization");
+    const adminClient = createClient(supabaseUrl, serviceRoleKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    if (action === "cleanup_expired") {
+      if (authHeader !== `Bearer ${serviceRoleKey}`) {
+        return jsonResponse(401, { error: "Unauthorized cleanup request." });
+      }
+      if (!secretKey || !secretKey.startsWith("sk_")) {
+        return jsonResponse(500, { error: "PAYMONGO_SECRET_KEY is not configured on the server." });
+      }
+
+      const { data: expiredCheckouts, error: expiredError } = await adminClient
+        .from("paymongo_checkouts")
+        .select("id, checkout_session_id, status")
+        .or(`status.eq.paid,and(status.eq.pending,expires_at.lte.${new Date().toISOString()})`)
+        .order("expires_at", { ascending: true })
+        .limit(100);
+      if (expiredError) return jsonResponse(500, { error: expiredError.message });
+
+      let released = 0;
+      let fulfilled = 0;
+      let deferred = 0;
+      const failures: string[] = [];
+
+      for (const checkout of expiredCheckouts || []) {
+        if (checkout.status === "paid") {
+          try {
+            await fulfillPaidCheckout(adminClient, checkout.id);
+            fulfilled += 1;
+          } catch (error) {
+            deferred += 1;
+            failures.push(
+              `${checkout.id}: ${error instanceof Error ? error.message : "Paid checkout fulfillment failed."}`,
+            );
+          }
+          continue;
+        }
+
+        if (!checkout.checkout_session_id) {
+          try {
+            const { count, error: reservationError } = await adminClient
+              .from("listings")
+              .select("id", { count: "exact", head: true })
+              .eq("reserved_by_checkout_id", checkout.id)
+              .eq("status", "reserved");
+            if (reservationError) throw new Error(reservationError.message);
+            if (count === 0) {
+              const { error: releaseError } = await adminClient.rpc(
+                "release_paymongo_checkout_reservation",
+                { p_checkout_id: checkout.id, p_status: "failed" },
+              );
+              if (releaseError) throw new Error(releaseError.message);
+              released += 1;
+              continue;
+            }
+
+            await deferCheckoutReservation(adminClient, checkout.id);
+            deferred += 1;
+            failures.push(`${checkout.id}: checkout session ID is missing; reservation was retained.`);
+          } catch (error) {
+            deferred += 1;
+            failures.push(
+              `${checkout.id}: ${error instanceof Error ? error.message : "Could not defer reservation."}`,
+            );
+          }
+          continue;
+        }
+
+        try {
+          let { response: retrieve, payload: sessionJson } = await retrievePaymongoSession(
+            secretKey,
+            checkout.checkout_session_id,
+          );
+          if (!retrieve.ok) {
+            throw new Error(paymongoErrorMessage(sessionJson, "Could not retrieve the checkout session."));
+          }
+
+          if (isPaidSession(sessionJson.data)) {
+            await fulfillPaidCheckout(adminClient, checkout.id);
+            fulfilled += 1;
+            continue;
+          }
+
+          const sessionStatus = (sessionJson.data?.attributes || sessionJson.data)?.status;
+          if (sessionStatus !== "expired") {
+            const { response: expireResponse } = await expirePaymongoSession(
+              secretKey,
+              checkout.checkout_session_id,
+            );
+            if (expireResponse.ok) {
+              const { error: releaseError } = await adminClient.rpc(
+                "release_paymongo_checkout_reservation",
+                { p_checkout_id: checkout.id, p_status: "expired" },
+              );
+              if (releaseError) throw new Error(releaseError.message);
+              released += 1;
+              continue;
+            }
+
+            const refreshed = await retrievePaymongoSession(secretKey, checkout.checkout_session_id);
+            retrieve = refreshed.response;
+            sessionJson = refreshed.payload;
+            if (!retrieve.ok) {
+              throw new Error(paymongoErrorMessage(sessionJson, "Could not recheck the checkout session."));
+            }
+            if (isPaidSession(sessionJson.data)) {
+              await fulfillPaidCheckout(adminClient, checkout.id);
+              fulfilled += 1;
+              continue;
+            }
+            const refreshedStatus = (sessionJson.data?.attributes || sessionJson.data)?.status;
+            if (refreshedStatus !== "expired") {
+              deferred += 1;
+              await deferCheckoutReservation(adminClient, checkout.id);
+              continue;
+            }
+          }
+
+          const { error: releaseError } = await adminClient.rpc(
+            "release_paymongo_checkout_reservation",
+            { p_checkout_id: checkout.id, p_status: "expired" },
+          );
+          if (releaseError) throw new Error(releaseError.message);
+          released += 1;
+        } catch (error) {
+          deferred += 1;
+          failures.push(
+            `${checkout.id}: ${error instanceof Error ? error.message : "Checkout cleanup failed."}`,
+          );
+          try {
+            await deferCheckoutReservation(adminClient, checkout.id);
+          } catch (deferError) {
+            failures.push(
+              `${checkout.id}: ${deferError instanceof Error ? deferError.message : "Could not defer reservation."}`,
+            );
+          }
+        }
+      }
+
+      return jsonResponse(failures.length > 0 ? 500 : 200, {
+        released,
+        fulfilled,
+        deferred,
+        failures,
+      });
+    }
+
     if (!authHeader) {
       return jsonResponse(401, { error: "Missing authorization header" });
     }
@@ -65,15 +295,8 @@ Deno.serve(async (req: Request) => {
       return jsonResponse(401, { error: "Unauthorized" });
     }
 
-    const adminClient = createClient(supabaseUrl, serviceRoleKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-
-    const body = await req.json();
-    const action = body.action;
-    const secretKey = Deno.env.get("PAYMONGO_SECRET_KEY") || "";
     if (
-      (action === "create" || action === "confirm") &&
+      (action === "create" || action === "create_auction_payment" || action === "confirm" || action === "cancel") &&
       (!secretKey || secretKey.includes("your_secret_key"))
     ) {
       return jsonResponse(500, {
@@ -222,6 +445,87 @@ Deno.serve(async (req: Request) => {
       return jsonResponse(200, { success: true, order_ids: orderIds });
     }
 
+    if (action === "cancel") {
+      const checkoutSessionId = String(body.checkout_session_id || "");
+      if (!checkoutSessionId) {
+        return jsonResponse(400, { error: "Missing checkout session id." });
+      }
+
+      const { data: checkout, error: checkoutError } = await adminClient
+        .from("paymongo_checkouts")
+        .select("id, status, order_ids")
+        .eq("checkout_session_id", checkoutSessionId)
+        .eq("buyer_id", userData.user.id)
+        .maybeSingle();
+      if (checkoutError) return jsonResponse(500, { error: checkoutError.message });
+      if (!checkout) return jsonResponse(404, { error: "Checkout session not found." });
+      if (checkout.status === "fulfilled") {
+        return jsonResponse(200, {
+          success: true,
+          order_already_created: true,
+          order_ids: checkout.order_ids || [],
+        });
+      }
+      if (checkout.status === "expired" || checkout.status === "failed") {
+        return jsonResponse(200, { success: true, already_cancelled: true });
+      }
+
+      const { response: retrieve, payload: sessionJson } = await retrievePaymongoSession(
+        secretKey,
+        checkoutSessionId,
+      );
+      if (!retrieve.ok) {
+        return jsonResponse(retrieve.status, {
+          error: paymongoErrorMessage(sessionJson, "Could not retrieve the checkout session."),
+        });
+      }
+      if (isPaidSession(sessionJson.data)) {
+        const result = await fulfillPaidCheckout(adminClient, checkout.id);
+        return jsonResponse(200, {
+          success: true,
+          order_already_created: true,
+          order_ids: result.order_ids,
+        });
+      }
+
+      const sessionStatus = (sessionJson.data?.attributes || sessionJson.data)?.status;
+      if (sessionStatus !== "expired") {
+        const { response: expireResponse } = await expirePaymongoSession(
+          secretKey,
+          checkoutSessionId,
+        );
+        if (!expireResponse.ok) {
+          const refreshed = await retrievePaymongoSession(secretKey, checkoutSessionId);
+          if (!refreshed.response.ok) {
+            return jsonResponse(refreshed.response.status, {
+              error: paymongoErrorMessage(refreshed.payload, "Could not recheck the checkout session."),
+            });
+          }
+          if (isPaidSession(refreshed.payload.data)) {
+            const result = await fulfillPaidCheckout(adminClient, checkout.id);
+            return jsonResponse(200, {
+              success: true,
+              order_already_created: true,
+              order_ids: result.order_ids,
+            });
+          }
+          const refreshedStatus = (refreshed.payload.data?.attributes || refreshed.payload.data)?.status;
+          if (refreshedStatus !== "expired") {
+            return jsonResponse(409, {
+              error: "Payment is still processing. The item remains reserved until PayMongo confirms the outcome.",
+            });
+          }
+        }
+      }
+
+      const { error: releaseError } = await adminClient.rpc(
+        "release_paymongo_checkout_reservation",
+        { p_checkout_id: checkout.id, p_status: "expired" },
+      );
+      if (releaseError) return jsonResponse(500, { error: releaseError.message });
+      return jsonResponse(200, { success: true, cancelled: true });
+    }
+
     if (action === "notify_sellers") {
       const orderIds = Array.isArray(body.order_ids)
         ? [...new Set(body.order_ids.filter((id: unknown): id is string => typeof id === "string"))]
@@ -329,6 +633,126 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    if (action === "create_auction_payment") {
+      const orderId = String(body.order_id || "");
+      const successUrl = String(body.success_url || "");
+      const cancelUrl = String(body.cancel_url || "");
+      if (!orderId || !successUrl || !cancelUrl) {
+        return jsonResponse(400, { error: "Missing auction order or PayMongo return URLs." });
+      }
+
+      const { data: checkoutRows, error: checkoutError } = await userClient.rpc(
+        "create_auction_paymongo_checkout",
+        { p_order_id: orderId },
+      );
+      if (checkoutError) return jsonResponse(409, { error: checkoutError.message });
+      const checkout = Array.isArray(checkoutRows) ? checkoutRows[0] : checkoutRows;
+      if (!checkout?.checkout_id || !checkout?.amount_centavos) {
+        return jsonResponse(500, { error: "Could not prepare the auction payment." });
+      }
+
+      const createSession = async (paymentMethodTypes: string[]) => {
+        const response = await fetch(PAYMONGO_CREATE_URL, {
+          method: "POST",
+          headers: {
+            Authorization: paymongoAuthHeader(secretKey),
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            data: {
+              attributes: {
+                send_email_receipt: true,
+                show_description: true,
+                show_line_items: true,
+                description: "ThriftSync winning auction payment",
+                line_items: [{
+                  name: `Auction payment: ${String(checkout.listing_title || "ThriftSync item").slice(0, 180)}`,
+                  amount: Number(checkout.amount_centavos),
+                  currency: "PHP",
+                  quantity: 1,
+                }],
+                payment_method_types: paymentMethodTypes,
+                success_url: successUrl,
+                cancel_url: cancelUrl,
+                reference_number: checkout.checkout_id,
+                metadata: {
+                  buyer_id: userData.user.id,
+                  checkout_id: checkout.checkout_id,
+                  order_id: orderId,
+                },
+              },
+            },
+          }),
+        });
+        const json = await response.json();
+        return { response, json };
+      };
+
+      let response: Response;
+      let json: { data?: { id?: string; attributes?: { checkout_url?: string } }; errors?: { detail?: string; code?: string }[] };
+      try {
+        ({ response, json } = await createSession(["card", "gcash", "paymaya", "grab_pay"]));
+        if (!response.ok) {
+          const retry = await createSession(["card"]);
+          response = retry.response;
+          json = retry.json;
+        }
+      } catch (error) {
+        await adminClient.rpc("release_paymongo_checkout_reservation", {
+          p_checkout_id: checkout.checkout_id,
+          p_status: "failed",
+        });
+        return jsonResponse(502, {
+          error: error instanceof Error ? error.message : "Could not connect to PayMongo.",
+        });
+      }
+      if (!response.ok) {
+        const { error: releaseError } = await adminClient.rpc("release_paymongo_checkout_reservation", {
+          p_checkout_id: checkout.checkout_id,
+          p_status: "failed",
+        });
+        return jsonResponse(response.status, {
+          error: releaseError
+            ? `${paymongoErrorMessage(json, "PayMongo could not create an auction payment session.")} Checkout cleanup failed: ${releaseError.message}`
+            : paymongoErrorMessage(json, "PayMongo could not create an auction payment session."),
+        });
+      }
+
+      const checkoutSessionId = json.data?.id;
+      const checkoutUrl = json.data?.attributes?.checkout_url;
+      if (!checkoutSessionId || !checkoutUrl) {
+        await adminClient.rpc("release_paymongo_checkout_reservation", {
+          p_checkout_id: checkout.checkout_id,
+          p_status: "failed",
+        });
+        return jsonResponse(502, { error: "PayMongo returned an incomplete auction payment session." });
+      }
+
+      const { error: updateError } = await adminClient
+        .from("paymongo_checkouts")
+        .update({ checkout_session_id: checkoutSessionId, updated_at: new Date().toISOString() })
+        .eq("id", checkout.checkout_id)
+        .eq("status", "pending");
+      if (updateError) {
+        const { response: expireResponse } = await expirePaymongoSession(secretKey, checkoutSessionId);
+        const { error: releaseError } = await adminClient.rpc("release_paymongo_checkout_reservation", {
+          p_checkout_id: checkout.checkout_id,
+          p_status: "failed",
+        });
+        return jsonResponse(500, {
+          error: `Could not save the auction payment session: ${updateError.message}${
+            !expireResponse.ok ? " PayMongo session could not be expired." : ""
+          }${releaseError ? ` Checkout cleanup failed: ${releaseError.message}` : ""}`,
+        });
+      }
+
+      return jsonResponse(200, {
+        checkout_session_id: checkoutSessionId,
+        checkout_url: checkoutUrl,
+      });
+    }
+
     if (action === "create") {
       const items = Array.isArray(body.items) ? body.items : [];
       if (items.length < 1 || items.length > 50) {
@@ -408,6 +832,35 @@ Deno.serve(async (req: Request) => {
         locker_location_id: lockerLocationId,
       };
 
+      const { data: localCheckout, error: localCheckoutError } = await adminClient
+        .from("paymongo_checkouts")
+        .insert({
+          buyer_id: userData.user.id,
+          checkout_session_id: null,
+          status: "pending",
+          payload,
+          amount_centavos: amountCentavos,
+        })
+        .select("id, expires_at")
+        .single();
+      if (localCheckoutError || !localCheckout) {
+        return jsonResponse(500, {
+          error: localCheckoutError?.message || "Could not create the local checkout record.",
+        });
+      }
+
+      const { error: reservationError } = await userClient.rpc("reserve_paymongo_checkout", {
+        p_checkout_id: localCheckout.id,
+      });
+      if (reservationError) {
+        await adminClient
+          .from("paymongo_checkouts")
+          .update({ status: "failed", updated_at: new Date().toISOString() })
+          .eq("id", localCheckout.id)
+          .eq("status", "pending");
+        return jsonResponse(409, { error: reservationError.message });
+      }
+
       const createSession = async (paymentMethodTypes: string[]) => {
         const response = await fetch(PAYMONGO_CREATE_URL, {
           method: "POST",
@@ -427,8 +880,10 @@ Deno.serve(async (req: Request) => {
                 payment_method_types: paymentMethodTypes,
                 success_url: successUrl,
                 cancel_url: cancelUrl,
+                reference_number: localCheckout.id,
                 metadata: {
                   buyer_id: userData.user.id,
+                  checkout_id: localCheckout.id,
                 },
               },
             },
@@ -441,15 +896,35 @@ Deno.serve(async (req: Request) => {
       const paymentMethodTypes = body.payment_method === "gcash"
         ? ["gcash"]
         : ["card", "gcash", "paymaya", "grab_pay"];
-      let { response, json } = await createSession(paymentMethodTypes);
-      if (!response.ok && paymentMethodTypes.length > 1) {
-        const retry = await createSession(["card"]);
-        response = retry.response;
-        json = retry.json;
+      let response: Response;
+      let json: { data?: { id?: string; attributes?: { checkout_url?: string } }; errors?: { detail?: string; code?: string }[] };
+      try {
+        ({ response, json } = await createSession(paymentMethodTypes));
+        if (!response.ok && paymentMethodTypes.length > 1) {
+          const retry = await createSession(["card"]);
+          response = retry.response;
+          json = retry.json;
+        }
+      } catch (error) {
+        const { error: releaseError } = await adminClient.rpc(
+          "release_paymongo_checkout_reservation",
+          { p_checkout_id: localCheckout.id, p_status: "failed" },
+        );
+        return jsonResponse(502, {
+          error: releaseError
+            ? `Could not connect to PayMongo. Inventory cleanup failed: ${releaseError.message}`
+            : error instanceof Error ? error.message : "Could not connect to PayMongo.",
+        });
       }
       if (!response.ok) {
+        const { error: releaseError } = await adminClient.rpc(
+          "release_paymongo_checkout_reservation",
+          { p_checkout_id: localCheckout.id, p_status: "failed" },
+        );
         return jsonResponse(response.status, {
-          error: paymongoErrorMessage(json, "PayMongo could not create a checkout session."),
+          error: releaseError
+            ? `${paymongoErrorMessage(json, "PayMongo could not create a checkout session.")} Inventory cleanup failed: ${releaseError.message}`
+            : paymongoErrorMessage(json, "PayMongo could not create a checkout session."),
         });
       }
 
@@ -457,18 +932,41 @@ Deno.serve(async (req: Request) => {
       const checkoutSessionId = session.id;
       const checkoutUrl = session.attributes?.checkout_url;
       if (!checkoutSessionId || !checkoutUrl) {
+        const { error: releaseError } = await adminClient.rpc(
+          "release_paymongo_checkout_reservation",
+          { p_checkout_id: localCheckout.id, p_status: "failed" },
+        );
+        if (releaseError) {
+          return jsonResponse(500, {
+            error: `PayMongo returned an incomplete checkout session. Inventory cleanup failed: ${releaseError.message}`,
+          });
+        }
         return jsonResponse(502, { error: "PayMongo returned an incomplete checkout session." });
       }
 
-      const { error: insertError } = await adminClient.from("paymongo_checkouts").insert({
-        buyer_id: userData.user.id,
-        checkout_session_id: checkoutSessionId,
-        status: "pending",
-        payload,
-        amount_centavos: amountCentavos,
-      });
-      if (insertError) {
-        return jsonResponse(500, { error: insertError.message });
+      const { error: updateError } = await adminClient
+        .from("paymongo_checkouts")
+        .update({ checkout_session_id: checkoutSessionId, updated_at: new Date().toISOString() })
+        .eq("id", localCheckout.id)
+        .eq("status", "pending");
+      if (updateError) {
+        const { response: expireResponse } = await expirePaymongoSession(secretKey, checkoutSessionId);
+        if (expireResponse.ok) {
+          const { error: releaseError } = await adminClient.rpc("release_paymongo_checkout_reservation", {
+            p_checkout_id: localCheckout.id,
+            p_status: "failed",
+          });
+          if (releaseError) {
+            return jsonResponse(500, {
+              error: `Could not save the PayMongo session or release inventory: ${updateError.message}; ${releaseError.message}`,
+            });
+          }
+        }
+        return jsonResponse(500, {
+          error: expireResponse.ok
+            ? `Could not save the PayMongo session: ${updateError.message}`
+            : `Could not save the PayMongo session or safely expire it. The item remains reserved for safety. ${updateError.message}`,
+        });
       }
 
       return jsonResponse(200, {
@@ -498,23 +996,14 @@ Deno.serve(async (req: Request) => {
           order_ids: localRow.order_ids,
         });
       }
-
-      let retrieve = await fetch(`https://api.paymongo.com/v2/checkout_sessions/${checkoutSessionId}`, {
-        headers: {
-          Authorization: paymongoAuthHeader(secretKey),
-          Accept: "application/json",
-        },
-      });
-      let sessionJson = await retrieve.json();
-      if (retrieve.status === 404) {
-        retrieve = await fetch(`https://api.paymongo.com/v1/checkout_sessions/${checkoutSessionId}`, {
-          headers: {
-            Authorization: paymongoAuthHeader(secretKey),
-            Accept: "application/json",
-          },
-        });
-        sessionJson = await retrieve.json();
+      if (localRow.status === "expired" || localRow.status === "failed") {
+        return jsonResponse(410, { error: "This checkout has expired. Start a new checkout to purchase the item." });
       }
+
+      const { response: retrieve, payload: sessionJson } = await retrievePaymongoSession(
+        secretKey,
+        checkoutSessionId,
+      );
       if (!retrieve.ok) {
         return jsonResponse(retrieve.status, {
           error: paymongoErrorMessage(sessionJson, "Could not retrieve the PayMongo session."),
@@ -523,63 +1012,24 @@ Deno.serve(async (req: Request) => {
 
       const session = sessionJson.data;
       if (!isPaidSession(session)) {
-        await adminClient
-          .from("paymongo_checkouts")
-          .update({ status: "failed", updated_at: new Date().toISOString() })
-          .eq("id", localRow.id);
+        const sessionStatus = (session?.attributes || session)?.status;
+        if (sessionStatus === "expired") {
+          const { error: releaseError } = await adminClient.rpc(
+            "release_paymongo_checkout_reservation",
+            { p_checkout_id: localRow.id, p_status: "expired" },
+          );
+          if (releaseError) return jsonResponse(500, { error: releaseError.message });
+          return jsonResponse(410, { error: "This PayMongo checkout has expired. Start a new checkout." });
+        }
         return jsonResponse(402, { error: "Payment is not complete yet. Finish checkout on PayMongo and return here." });
       }
 
-      await adminClient
-        .from("paymongo_checkouts")
-        .update({ status: "paid", updated_at: new Date().toISOString() })
-        .eq("id", localRow.id);
-
-      const payload = localRow.payload as {
-        items: { listing_id: string; amount: number }[];
-        shipping_address: string;
-        voucher_code: string | null;
-        delivery_method: string;
-        locker_location_id: string | null;
-      };
-
-      const { data: checkoutResult, error: checkoutError } = await userClient.rpc(
-        "checkout_fixed_items_with_fulfillment",
-        {
-          p_shipping_address: payload.shipping_address,
-          p_items: payload.items,
-          p_voucher_code: payload.voucher_code,
-          p_delivery_method: payload.delivery_method,
-          p_locker_location_id: payload.locker_location_id,
-        },
-      );
-      if (checkoutError) {
-        return jsonResponse(400, {
-          error: `Payment succeeded, but the order could not be created: ${checkoutError.message}`,
-        });
-      }
-
-      const result = Array.isArray(checkoutResult) ? checkoutResult[0] : checkoutResult;
-      const orderIds = result?.order_ids || [];
-      const { error: paymentMetadataError } = await adminClient
-        .from("orders")
-        .update({ payment_method: "paymongo", payment_is_simulated: false })
-        .in("id", orderIds)
-        .eq("buyer_id", userData.user.id);
-      await adminClient
-        .from("paymongo_checkouts")
-        .update({
-          status: "fulfilled",
-          order_ids: orderIds,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", localRow.id);
+      const result = await fulfillPaidCheckout(adminClient, localRow.id);
 
       return jsonResponse(200, {
         success: true,
-        order_ids: orderIds,
+        order_ids: result.order_ids,
         discount_amount: result?.discount_amount || 0,
-        payment_metadata_warning: paymentMetadataError?.message,
       });
     }
 

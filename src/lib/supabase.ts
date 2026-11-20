@@ -9,9 +9,11 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 export type Profile = {
-  id: string; role: 'buyer' | 'seller' | 'admin'; display_name: string;
+  id: string; role: 'buyer' | 'seller' | 'moderator' | 'admin'; display_name: string;
   avatar_url: string | null; bio: string | null; default_lat: number | null;
   default_lng: number | null; default_barangay: string | null; is_banned: boolean;
+  account_status: 'active' | 'restricted' | 'suspended';
+  account_status_updated_at: string; account_restricted_until: string | null;
   created_at: string;
 };
 export type Boutique = {
@@ -26,6 +28,7 @@ export type Boutique = {
 export type ImageAngle = 'front' | 'back' | 'left' | 'right' | 'detail' | 'flaw' | 'tag' | 'other';
 export type ImageMetadata = { url: string; angle: ImageAngle; is_flaw: boolean; caption?: string };
 export type AuctionMode = 'ENGLISH' | 'DUTCH';
+export type ModerationStatus = 'pending_review' | 'approved' | 'rejected' | 'temporarily_hidden';
 export type Listing = {
   id: string; boutique_id: string; title: string; description: string | null; price: number;
   era: string | null; category: string | null;
@@ -36,9 +39,10 @@ export type Listing = {
   auction_start_price: number | null; reserve_price: number | null; increment_step: number | null;
   decrement_rate: number | null; decrement_interval_minutes: number;
   current_dutch_price: number | null; dutch_floor_price: number | null;
-  status: 'active' | 'sold' | 'exchanged' | 'draft'; moderation_status: 'pending_review' | 'approved' | 'rejected';
+  status: 'active' | 'reserved' | 'pending_auction_payment' | 'sold' | 'exchanged' | 'draft'; moderation_status: ModerationStatus;
   barter_enabled: boolean;
   moderation_note: string | null; moderated_by: string | null; moderated_at: string | null;
+  moderation_hidden_until: string | null;
   sku: string | null; coa_verified: boolean; views: number; created_at: string;
 };
 export type Bid = { id: string; listing_id: string; bidder_id: string; amount: number; is_winning: boolean; created_at: string };
@@ -58,17 +62,23 @@ export type GeneralReportCategory = Exclude<ReportCategory, 'illegal_item' | 'pr
 export type GeneralReport = {
   id: string; reporter_id: string; reported_user_id: string; listing_id: string | null;
   violation_category: GeneralReportCategory; description: string; evidence_paths: string[];
-  status: 'pending' | 'under_review' | 'resolved' | 'dismissed'; admin_notes: string | null; created_at: string;
+  status: 'pending' | 'under_review' | 'resolved' | 'dismissed'; admin_notes: string | null;
+  moderation_priority: 'low' | 'normal' | 'high' | 'urgent'; created_at: string;
+};
+export type ModerationAction = {
+  id: string; listing_id: string | null; general_report_id: string | null; actor_id: string | null;
+  action: string; notes: string | null; classification: string | null; hide_until: string | null; created_at: string;
 };
 export type AdminAuditLog = {
   id: string; report_id: string | null; actor_id: string | null; action: string; details: Record<string, unknown> | null; created_at: string;
 };
 export type Order = {
   id: string; buyer_id: string; listing_id: string; boutique_id: string; amount: number;
-  status: 'escrow_held' | 'shipped' | 'delivered' | 'completed' | 'disputed' | 'refunded' | 'in_escrow';
+  status: 'pending_payment' | 'payment_expired' | 'escrow_held' | 'shipped' | 'delivered' | 'completed' | 'disputed' | 'refunded' | 'in_escrow';
   shipping_address: string | null; tracking_number: string | null; delivery_method: 'courier' | 'pickup' | 'locker';
   locker_location_id: string | null; payment_method: 'paymongo' | 'voucher' | 'gcash_demo' | 'cash_on_delivery' | 'unknown';
-  payment_is_simulated: boolean; created_at: string;
+  payment_is_simulated: boolean; payment_due_at: string | null; payment_reference: string | null;
+  paid_at: string | null; created_at: string;
 };
 export type AuctionWinnerNotification = {
   id: string; recipient_id: string; listing_id: string; order_id: string;

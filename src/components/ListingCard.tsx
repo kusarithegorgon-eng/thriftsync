@@ -106,6 +106,9 @@ export function ListingCard({ listing }: { listing: ListingWithBoutique }) {
           {listing.status === 'sold' && (
             <span className="badge bg-ink-900 text-cream">Sold</span>
           )}
+          {listing.status === 'reserved' && (
+            <span className="badge bg-gold-100 text-gold-800">Reserved</span>
+          )}
           {listing.status === 'exchanged' && (
             <span className="badge bg-sage-700 text-white">Exchanged</span>
           )}
