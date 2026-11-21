@@ -1,20 +1,22 @@
 import { useEffect, useState } from 'react';
-import { MapPin, Star, Package, Shield, Clock } from 'lucide-react';
+import { MapPin, Star, Package, Shield, Clock, Pencil } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { supabase, type Boutique, type Listing, type Review, type SellerReview } from '@/lib/supabase';
 import { ListingCard, ListingCardSkeleton } from '@/components/ListingCard';
 import { ReportSubmissionModal } from '@/components/ReportSubmissionModal';
+import { SellerProfileEditor } from '@/components/SellerProfileEditor';
 
 export function BoutiquePage({ slug }: { slug: string }) {
   const { navigate } = useRouter();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [boutique, setBoutique] = useState<Boutique | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [sellerReviews, setSellerReviews] = useState<Pick<SellerReview, 'accuracy_rating' | 'communication_rating' | 'punctuality_rating'>[]>([]);
   const [loading, setLoading] = useState(true);
   const [showReportModal, setShowReportModal] = useState(false);
+  const [editingSellerProfile, setEditingSellerProfile] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -111,7 +113,18 @@ export function BoutiquePage({ slug }: { slug: string }) {
             )}
           </div>
           <div className="flex-1 sm:pb-4">
-            <h1 className="font-serif text-2xl sm:text-3xl font-bold text-ink-900">{boutique.name}</h1>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <h1 className="font-serif text-2xl sm:text-3xl font-bold text-ink-900">{boutique.name}</h1>
+              {user?.id === boutique.seller_id && profile && (
+                <button
+                  type="button"
+                  onClick={() => setEditingSellerProfile(true)}
+                  className="btn-secondary inline-flex items-center gap-2 self-start text-sm"
+                >
+                  <Pencil className="h-4 w-4" /> Edit shop profile
+                </button>
+              )}
+            </div>
             {boutique.tagline && <p className="text-sm text-ink-600 mt-0.5">{boutique.tagline}</p>}
             <div className="flex flex-wrap items-center gap-3 mt-2 text-sm">
               <span className="flex items-center gap-1 text-gold-600 font-medium">
@@ -145,7 +158,7 @@ export function BoutiquePage({ slug }: { slug: string }) {
           <div className="flex items-center gap-1.5 px-3 py-1.5 bg-ink-50 text-ink-600 rounded-lg text-xs font-medium">
             <Clock className="w-3.5 h-3.5" /> Joined {new Date(boutique.created_at).getFullYear()}
           </div>
-          {user && (
+          {user && user.id !== boutique.seller_id && (
             <button
               type="button"
               onClick={() => setShowReportModal(true)}
@@ -225,6 +238,15 @@ export function BoutiquePage({ slug }: { slug: string }) {
           defaultCategory="illegal_item"
           title="Report Seller"
           fraudEligible={false}
+        />
+      )}
+      {editingSellerProfile && user && profile && user.id === boutique.seller_id && (
+        <SellerProfileEditor
+          userId={user.id}
+          profile={profile}
+          boutique={boutique}
+          onClose={() => setEditingSellerProfile(false)}
+          onBoutiqueSaved={setBoutique}
         />
       )}
     </div>

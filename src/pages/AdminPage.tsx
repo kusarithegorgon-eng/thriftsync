@@ -43,7 +43,13 @@ type AdminHistoryEntry = {
   source: 'Admin' | 'Inventory' | 'Order';
   action: string;
   actor_id: string | null;
+  actor_name?: string | null;
+  related_profile_name?: string | null;
   details: Record<string, unknown> | null;
+  old_status?: string | null;
+  new_status?: string | null;
+  old_price?: number | null;
+  new_price?: number | null;
   created_at: string;
 };
 type ManagedProfile = Pick<Profile, 'id' | 'display_name' | 'role' | 'account_status' | 'account_restricted_until'> & {
@@ -60,6 +66,149 @@ const PROFILE_ROLE_OPTIONS: { value: Profile['role']; label: string }[] = [
   { value: 'moderator', label: 'Content Moderator' },
   { value: 'admin', label: 'System Administrator' },
 ];
+
+const HISTORY_VALUE_LABELS: Record<string, string> = {
+  active: 'Active',
+  approved: 'Approved',
+  buyer: 'Buyer',
+  completed: 'Completed',
+  courier: 'Courier',
+  draft: 'Draft',
+  in_escrow: 'In escrow',
+  pending: 'Pending',
+  pending_payment: 'Awaiting payment',
+  pending_review: 'Pending review',
+  payment_expired: 'Payment window expired',
+  rejected: 'Rejected',
+  restricted: 'Restricted',
+  seller: 'Seller',
+  suspended: 'Suspended',
+  temporarily_hidden: 'Temporarily hidden',
+  moderator: 'Content Moderator',
+  admin: 'System Administrator',
+  disputed: 'Under dispute',
+  delivered: 'Delivered',
+  shipped: 'Shipped',
+  refunded: 'Refunded',
+  escrow_held: 'Payment held',
+  cash_on_delivery: 'Cash on delivery',
+  paymongo: 'PayMongo',
+  barter: 'Barter',
+};
+
+function historyValue(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return HISTORY_VALUE_LABELS[value] || value.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function historyDetail(entry: AdminHistoryEntry, key: string): string | null {
+  const value = entry.details?.[key];
+  if (typeof value === 'string' && value.trim()) return value;
+  if (typeof value === 'number') return String(value);
+  return null;
+}
+
+function historyTitle(entry: AdminHistoryEntry): string {
+  const titles: Record<string, string> = {
+    profile_role_changed: 'Account role changed',
+    account_status_changed: 'Account access changed',
+    account_restriction_expired: 'Account restriction ended',
+    listing_warning: 'Seller warning sent',
+    listing_correction_request: 'Listing correction requested',
+    listing_temporary_hide: 'Listing hidden from buyers',
+    listing_restore: 'Listing restored',
+    listing_temporary_hide_expired: 'Listing automatically restored',
+    report_classified: 'Report priority updated',
+    report_submitted: 'Report submitted',
+    escrow_frozen: 'Payment held for review',
+    report_dismissed: 'Report closed',
+    refund_issued: 'Buyer refund issued',
+    seller_sanctioned: 'Seller account actioned',
+    listing_snapshot: 'Earlier listing',
+    listing_created: 'Listing created',
+    listing_deleted: 'Listing removed',
+    listing_status_changed: 'Listing status changed',
+    listing_price_changed: 'Listing price changed',
+    listing_moderation_changed: 'Listing review status changed',
+    order_snapshot: 'Earlier order',
+    order_created: 'Order placed',
+    order_status_changed: 'Order status changed',
+    payment_recorded: 'Payment recorded',
+  };
+  return titles[entry.action] || (entry.source === 'Admin' ? 'Administrator activity' : `${entry.source} updated`);
+}
+
+function historyDescription(entry: AdminHistoryEntry): string {
+  const title = historyDetail(entry, 'title');
+  const oldStatus = entry.old_status ? historyValue(entry.old_status) : null;
+  const newStatus = entry.new_status ? historyValue(entry.new_status) : null;
+  const oldPrice = entry.old_price != null ? formatPrice(entry.old_price) : null;
+  const newPrice = entry.new_price != null ? formatPrice(entry.new_price) : null;
+  const amount = historyDetail(entry, 'amount');
+  const name = title ? `“${title}”` : 'This listing';
+
+  switch (entry.action) {
+    case 'listing_snapshot':
+      return title ? `“${title}” was already listed when history tracking began.` : 'This listing was already in the marketplace when history tracking began.';
+    case 'order_snapshot':
+      return amount ? `An existing order was included when history tracking began. Order total: ${formatPrice(Number(amount))}.` : 'An existing order was included when history tracking began.';
+    case 'listing_created':
+      return `${name} was added to the marketplace${newPrice ? ` at ${newPrice}` : ''}.`;
+    case 'listing_deleted':
+      return `${name} was removed from the marketplace.`;
+    case 'listing_status_changed':
+    case 'order_status_changed':
+      return oldStatus && newStatus ? `Status changed from ${oldStatus} to ${newStatus}.` : 'The status was updated.';
+    case 'listing_price_changed':
+      return oldPrice !== null && newPrice !== null ? `Price changed from ${oldPrice} to ${newPrice}.` : 'The listing price was updated.';
+    case 'listing_moderation_changed':
+      return oldStatus && newStatus ? `Review status changed from ${oldStatus} to ${newStatus}.` : 'The listing review status was updated.';
+    case 'order_created':
+      return amount ? `A new order was placed for ${formatPrice(Number(amount))}.` : 'A new order was placed.';
+    case 'payment_recorded': {
+      const method = historyDetail(entry, 'payment_method');
+      return `Payment received${method ? ` via ${historyValue(method)}` : ''}.`;
+    }
+    case 'profile_role_changed': {
+      const previousRole = historyValue(historyDetail(entry, 'previous_role'));
+      const nextRole = historyValue(historyDetail(entry, 'new_role'));
+      return `${entry.related_profile_name || 'An account'}${previousRole && nextRole ? ` changed from ${previousRole} to ${nextRole}` : ' had its role updated'}.`;
+    }
+    case 'account_status_changed': {
+      const status = historyValue(historyDetail(entry, 'new_status'));
+      const reason = historyDetail(entry, 'reason');
+      return `${entry.related_profile_name || 'An account'} was set to ${status || 'a new access status'}${reason ? `. Reason: ${reason}` : ''}.`;
+    }
+    case 'account_restriction_expired':
+      return `${entry.related_profile_name || 'An account'} is active again after its temporary restriction.`;
+    case 'listing_warning':
+    case 'listing_correction_request':
+    case 'listing_temporary_hide':
+    case 'listing_restore':
+    case 'listing_temporary_hide_expired': {
+      const notes = historyDetail(entry, 'notes');
+      return `${name}${notes ? ` — ${notes}` : ''}`;
+    }
+    case 'report_classified': {
+      const priority = historyValue(historyDetail(entry, 'priority'));
+      return priority ? `Report priority set to ${priority}.` : 'A report was reviewed and prioritized.';
+    }
+    case 'report_submitted': {
+      const category = historyValue(historyDetail(entry, 'category'));
+      return category ? `A ${category.toLowerCase()} report was submitted.` : 'A report was submitted.';
+    }
+    case 'escrow_frozen':
+      return 'The order payment was held while a buyer report is reviewed.';
+    case 'report_dismissed':
+      return 'The report was reviewed and closed without a refund.';
+    case 'refund_issued':
+      return 'A refund was issued to the buyer.';
+    case 'seller_sanctioned':
+      return 'An account action was taken following a report review.';
+    default:
+      return entry.source === 'Admin' ? 'An administrator action was recorded.' : 'A marketplace change was recorded.';
+  }
+}
 
 export function AdminPage() {
   const { user, profile, loading: authLoading } = useAuth();
@@ -99,6 +248,8 @@ export function AdminPage() {
   const [adminHistory, setAdminHistory] = useState<AdminHistoryEntry[]>([]);
   const [adminHistoryLoading, setAdminHistoryLoading] = useState(false);
   const [adminHistoryError, setAdminHistoryError] = useState<string | null>(null);
+  const [adminHistoryWarning, setAdminHistoryWarning] = useState<string | null>(null);
+  const [historySearch, setHistorySearch] = useState('');
   const isSystemAdmin = profile?.role === 'admin';
   const hasModerationAccess = isSystemAdmin || profile?.role === 'moderator';
   const selectedListingId = selectedListing?.id;
@@ -117,12 +268,13 @@ export function AdminPage() {
 
   const loadAdminHistory = useCallback(async () => {
     setAdminHistoryLoading(true);
+    setAdminHistoryWarning(null);
     const [auditResult, inventoryResult, orderResult] = await Promise.all([
       supabase.from('admin_audit_logs').select('id, actor_id, action, details, created_at')
         .order('created_at', { ascending: false }).limit(100),
-      supabase.from('inventory_events').select('id, actor_id, event_type, details, created_at')
+      supabase.from('inventory_events').select('id, actor_id, event_type, old_status, new_status, old_price, new_price, details, created_at')
         .order('created_at', { ascending: false }).limit(100),
-      supabase.from('order_events').select('id, actor_id, event_type, details, created_at')
+      supabase.from('order_events').select('id, actor_id, event_type, old_status, new_status, details, created_at')
         .order('created_at', { ascending: false }).limit(100),
     ]);
     const error = auditResult.error || inventoryResult.error || orderResult.error;
@@ -133,13 +285,55 @@ export function AdminPage() {
     }
     const entries: AdminHistoryEntry[] = [
       ...((auditResult.data || []) as Omit<AdminHistoryEntry, 'source'>[]).map((entry) => ({ ...entry, source: 'Admin' as const })),
-      ...((inventoryResult.data || []) as { id: string; actor_id: string | null; event_type: string; details: Record<string, unknown>; created_at: string }[])
-        .map((entry) => ({ id: entry.id, actor_id: entry.actor_id, action: entry.event_type, details: entry.details, created_at: entry.created_at, source: 'Inventory' as const })),
-      ...((orderResult.data || []) as { id: string; actor_id: string | null; event_type: string; details: Record<string, unknown>; created_at: string }[])
-        .map((entry) => ({ id: entry.id, actor_id: entry.actor_id, action: entry.event_type, details: entry.details, created_at: entry.created_at, source: 'Order' as const })),
+      ...((inventoryResult.data || []) as {
+        id: string; actor_id: string | null; event_type: string; old_status: string | null;
+        new_status: string | null; old_price: number | null; new_price: number | null;
+        details: Record<string, unknown>; created_at: string;
+      }[])
+        .map((entry) => ({
+          id: entry.id, actor_id: entry.actor_id, action: entry.event_type,
+          old_status: entry.old_status, new_status: entry.new_status,
+          old_price: entry.old_price, new_price: entry.new_price,
+          details: entry.details, created_at: entry.created_at, source: 'Inventory' as const,
+        })),
+      ...((orderResult.data || []) as {
+        id: string; actor_id: string | null; event_type: string; old_status: string | null;
+        new_status: string | null; details: Record<string, unknown>; created_at: string;
+      }[])
+        .map((entry) => ({
+          id: entry.id, actor_id: entry.actor_id, action: entry.event_type,
+          old_status: entry.old_status, new_status: entry.new_status,
+          details: entry.details, created_at: entry.created_at, source: 'Order' as const,
+        })),
     ];
-    setAdminHistory(entries.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).slice(0, 150));
+    const visibleEntries = entries.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).slice(0, 150);
+    const relatedProfileIds = [...new Set(visibleEntries.flatMap((entry) => [
+      entry.actor_id,
+      historyDetail(entry, 'profile_id'),
+    ]).filter((id): id is string => Boolean(id)))];
+    let profileNames = new Map<string, string>();
+    let profileLookupError: string | null = null;
+    if (relatedProfileIds.length > 0) {
+      const { data: profiles, error: profilesError } = await supabase
+        .from('profiles')
+        .select('id, display_name')
+        .in('id', relatedProfileIds);
+      if (profilesError) {
+        profileLookupError = `History loaded, but account names could not be looked up: ${profilesError.message}`;
+      } else {
+        profileNames = new Map((profiles || []).map((person) => [person.id, person.display_name]));
+      }
+    }
+    setAdminHistory(visibleEntries.map((entry) => {
+      const relatedProfileId = historyDetail(entry, 'profile_id');
+      return {
+        ...entry,
+        actor_name: entry.actor_id ? profileNames.get(entry.actor_id) || null : null,
+        related_profile_name: relatedProfileId ? profileNames.get(relatedProfileId) || null : null,
+      };
+    }));
     setAdminHistoryError(null);
+    setAdminHistoryWarning(profileLookupError);
     setAdminHistoryLoading(false);
   }, []);
 
@@ -647,6 +841,20 @@ export function AdminPage() {
     managedProfile.display_name.toLowerCase().includes(search)
     || managedProfile.id.toLowerCase().includes(search)
   );
+  const historySearchTerm = historySearch.trim().toLowerCase();
+  const filteredAdminHistory = adminHistory.filter((entry) => {
+    if (!historySearchTerm) return true;
+    const source = entry.source === 'Inventory' ? 'listing' : entry.source.toLowerCase();
+    const date = new Date(entry.created_at).toLocaleString();
+    return [
+      historyTitle(entry),
+      historyDescription(entry),
+      entry.actor_name || '',
+      entry.related_profile_name || '',
+      source,
+      date,
+    ].some((value) => value.toLowerCase().includes(historySearchTerm));
+  });
 
   function toggleListingSelection(listingId: string) {
     setSelectedIds((current) => current.includes(listingId)
@@ -765,7 +973,7 @@ export function AdminPage() {
               )}
             >
               <HistoryIcon className="h-4 w-4" aria-hidden="true" />
-              Audit History
+              Activity History
             </button>
           </>
         )}
@@ -820,35 +1028,69 @@ export function AdminPage() {
       {isSystemAdmin && activeSection === 'history' && (
         <section>
           <div className="mb-4">
-            <h2 className="font-serif text-2xl font-bold text-ink-900">Audit History</h2>
-            <p className="mt-1 text-xs text-ink-500">Administrator decisions, inventory changes, and order/payment events.</p>
+            <h2 className="font-serif text-2xl font-bold text-ink-900">Activity History</h2>
+            <p className="mt-1 text-xs text-ink-500">A plain-language record of important account, listing, and order changes.</p>
           </div>
           {adminHistoryError && (
             <p role="alert" className="mb-4 rounded-lg bg-terracotta-50 p-3 text-sm text-terracotta-700">
               Could not load audit history: {adminHistoryError}
             </p>
           )}
+          {adminHistoryWarning && (
+            <p role="status" className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+              {adminHistoryWarning}
+            </p>
+          )}
+          <label className="relative mb-4 block max-w-xl">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-400" aria-hidden="true" />
+            <input
+              type="search"
+              value={historySearch}
+              onChange={(event) => setHistorySearch(event.target.value)}
+              placeholder="Search by activity, person, or date..."
+              aria-label="Search activity history"
+              className="input-field pl-9"
+            />
+          </label>
           {adminHistoryLoading ? (
             <p className="py-12 text-center text-sm text-ink-500">Loading audit history…</p>
           ) : adminHistory.length === 0 ? (
             <p className="card p-6 text-sm text-ink-500">No history events are available.</p>
+          ) : filteredAdminHistory.length === 0 ? (
+            <div className="card p-6 text-center text-sm text-ink-500">
+              <p>No activity matches “{historySearch}”.</p>
+              <button type="button" onClick={() => setHistorySearch('')} className="mt-2 font-medium text-ink-800 hover:underline">
+                Clear search
+              </button>
+            </div>
           ) : (
             <div className="card divide-y divide-ink-100">
-              {adminHistory.map((entry) => (
+              {filteredAdminHistory.map((entry) => (
                 <article key={`${entry.source}-${entry.id}`} className="flex flex-col gap-1 p-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="badge bg-ink-100 text-ink-700">{entry.source}</span>
-                      <span className="text-sm font-medium text-ink-900">{entry.action.replace(/_/g, ' ')}</span>
+                      <span className="badge bg-ink-100 text-ink-700">
+                        {entry.source === 'Inventory' ? 'Listing' : entry.source === 'Order' ? 'Order' : 'Admin'}
+                      </span>
+                      <span className="text-sm font-medium text-ink-900">{historyTitle(entry)}</span>
                     </div>
-                    {entry.details && (
-                      <p className="mt-1 break-words text-[10px] text-ink-500">
-                        {JSON.stringify(entry.details)}
-                      </p>
-                    )}
-                    {entry.actor_id && <p className="mt-1 text-[10px] text-ink-400">Actor {entry.actor_id}</p>}
+                    <p className="mt-1 break-words text-xs text-ink-600">
+                      {historyDescription(entry)}
+                    </p>
+                    <p className="mt-1 text-[10px] text-ink-400">
+                      {entry.actor_name
+                        ? `Changed by ${entry.actor_name}`
+                        : entry.actor_id
+                          ? `Changed by ${entry.source === 'Admin' ? 'an administrator' : 'a marketplace user'}`
+                          : 'Recorded by the system'}
+                    </p>
                   </div>
-                  <time className="shrink-0 text-[10px] text-ink-400">{new Date(entry.created_at).toLocaleString()}</time>
+                  <time className="shrink-0 text-[11px] text-ink-400">
+                    {new Date(entry.created_at).toLocaleString(undefined, {
+                      dateStyle: 'medium',
+                      timeStyle: 'short',
+                    })}
+                  </time>
                 </article>
               ))}
             </div>

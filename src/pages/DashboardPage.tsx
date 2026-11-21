@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { TrendingUp, Package, DollarSign, Eye, Gavel, Plus, ArrowRight, Clock, Truck, Share2, KeyRound, ArrowLeftRight } from 'lucide-react';
+import { TrendingUp, Package, DollarSign, Eye, Gavel, Plus, ArrowRight, Clock, Truck, Share2, KeyRound, ArrowLeftRight, Store, Pencil } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { supabase, type Listing, type Boutique, type Order, type Profile } from '@/lib/supabase';
 import { formatPrice, formatTimeAgo, cn } from '@/lib/utils';
 import { SellerLiveAuctionBiddersModal } from '@/components/SellerLiveAuctionBiddersModal';
+import { SellerProfileEditor } from '@/components/SellerProfileEditor';
 
 type SellerOrder = Order & {
   listings: Pick<Listing, 'title'> | null;
@@ -13,7 +14,7 @@ type SellerOrder = Order & {
 
 export function DashboardPage() {
   const { navigate } = useRouter();
-  const { user, loading: authLoading } = useAuth();
+  const { user, profile, loading: authLoading } = useAuth();
   const [boutique, setBoutique] = useState<Boutique | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
   const [orders, setOrders] = useState<SellerOrder[]>([]);
@@ -30,6 +31,7 @@ export function DashboardPage() {
     action: string; notes: string | null; hide_until: string | null;
   }>>({});
   const [moderationNoticeError, setModerationNoticeError] = useState<string | null>(null);
+  const [editingSellerProfile, setEditingSellerProfile] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -256,9 +258,18 @@ export function DashboardPage() {
           <h1 className="font-serif text-2xl font-bold text-ink-900">{boutique.name}</h1>
           <p className="text-sm text-ink-500">{boutique.tagline || 'Seller Dashboard'}</p>
         </div>
-        <button onClick={() => navigate({ name: 'sell' })} className="btn-primary flex items-center gap-2 self-start">
-          <Plus className="w-4 h-4" /> New Listing
-        </button>
+        <div className="flex flex-wrap items-center gap-2 self-start">
+          <button
+            type="button"
+            onClick={() => setEditingSellerProfile(true)}
+            className="btn-secondary flex items-center gap-2"
+          >
+            <Pencil className="h-4 w-4" /> Edit seller profile
+          </button>
+          <button onClick={() => navigate({ name: 'sell' })} className="btn-primary flex items-center gap-2">
+            <Plus className="w-4 h-4" /> New Listing
+          </button>
+        </div>
       </div>
 
       {/* Stats */}
@@ -543,6 +554,9 @@ export function DashboardPage() {
               <button onClick={() => navigate({ name: 'boutique', slug: boutique.slug })} className="w-full flex items-center gap-2 p-2.5 rounded-lg hover:bg-ink-50 transition-colors text-sm text-ink-700">
                 <Eye className="w-4 h-4" /> View your boutique
               </button>
+              <button onClick={() => setEditingSellerProfile(true)} className="w-full flex items-center gap-2 p-2.5 rounded-lg hover:bg-ink-50 transition-colors text-sm text-ink-700">
+                <Store className="w-4 h-4" /> Edit seller profile
+              </button>
               <button onClick={() => navigate({ name: 'orders' })} className="w-full flex items-center gap-2 p-2.5 rounded-lg hover:bg-ink-50 transition-colors text-sm text-ink-700">
                 <Package className="w-4 h-4" /> View all orders
               </button>
@@ -550,6 +564,15 @@ export function DashboardPage() {
           </div>
         </div>
       </div>
+      {editingSellerProfile && user && profile && boutique.seller_id === user.id && (
+        <SellerProfileEditor
+          userId={user.id}
+          profile={profile}
+          boutique={boutique}
+          onClose={() => setEditingSellerProfile(false)}
+          onBoutiqueSaved={setBoutique}
+        />
+      )}
       {selectedAuction && (
         <SellerLiveAuctionBiddersModal
           open={Boolean(selectedAuction)}
