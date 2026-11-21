@@ -1,15 +1,38 @@
-import { useEffect, useState } from 'react';
-import { TrendingUp, Package, DollarSign, Eye, Gavel, Plus, ArrowRight, Clock, Truck, Share2, KeyRound, ArrowLeftRight, Store, Pencil } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { TrendingUp, Package, DollarSign, Eye, Gavel, Plus, ArrowRight, Clock, Truck, Share2, KeyRound, ArrowLeftRight, Store, Pencil, Star, Camera } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
-import { supabase, type Listing, type Boutique, type Order, type Profile } from '@/lib/supabase';
+import { supabase, type Listing, type Boutique, type Order, type Profile, type DeliveryJobEvent } from '@/lib/supabase';
 import { formatPrice, formatTimeAgo, cn } from '@/lib/utils';
 import { SellerLiveAuctionBiddersModal } from '@/components/SellerLiveAuctionBiddersModal';
 import { SellerProfileEditor } from '@/components/SellerProfileEditor';
+import { LockerQrScanner } from '@/components/LockerQrScanner';
+
+const SELLER_ORDER_PAGE_SIZE = 10;
 
 type SellerOrder = Order & {
   listings: Pick<Listing, 'title'> | null;
   profiles: Pick<Profile, 'display_name'> | null;
+};
+type SellerCourierPickupInfo = {
+  pickup_code: string;
+  courier_name: string;
+  tracking_code: string;
+  delivery_status: string;
+};
+type SellerCourierProgress = {
+  courier_id: string;
+  status: string;
+  tracking_code: string;
+  events: Pick<DeliveryJobEvent, 'id' | 'event_type' | 'created_at'>[];
+};
+type SellerManagedCourier = {
+  courier_id: string;
+  display_name: string;
+  account_role: Profile['role'];
+  account_status: Profile['account_status'];
+  is_active: boolean;
+  created_at: string;
 };
 
 export function DashboardPage() {
@@ -18,11 +41,37 @@ export function DashboardPage() {
   const [boutique, setBoutique] = useState<Boutique | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
   const [orders, setOrders] = useState<SellerOrder[]>([]);
+  const [orderCount, setOrderCount] = useState(0);
+  const [orderPage, setOrderPage] = useState(0);
+  const [orderStatusFilter, setOrderStatusFilter] = useState('all');
+  const [orderLoading, setOrderLoading] = useState(false);
+  const [orderLoadError, setOrderLoadError] = useState<string | null>(null);
+  const [gmvTotal, setGmvTotal] = useState(0);
+  const [salesSummaryError, setSalesSummaryError] = useState<string | null>(null);
+  const [reviewedBuyerOrderIds, setReviewedBuyerOrderIds] = useState<string[]>([]);
+  const [buyerReviewRatings, setBuyerReviewRatings] = useState<Record<string, number>>({});
+  const [buyerReviewBodies, setBuyerReviewBodies] = useState<Record<string, string>>({});
+  const [buyerReviewErrors, setBuyerReviewErrors] = useState<Record<string, string>>({});
+  const [buyerReviewSubmittingId, setBuyerReviewSubmittingId] = useState<string | null>(null);
+  const [lockerQrScannerOpen, setLockerQrScannerOpen] = useState(false);
+  const [lockerQrMessage, setLockerQrMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [trackingNumbers, setTrackingNumbers] = useState<Record<string, string>>({});
   const [lockerPins, setLockerPins] = useState<Record<string, string>>({});
   const [orderActionLoading, setOrderActionLoading] = useState<string | null>(null);
   const [orderActionErrors, setOrderActionErrors] = useState<Record<string, string>>({});
+  const [courierPickupInfos, setCourierPickupInfos] = useState<Record<string, SellerCourierPickupInfo>>({});
+  const [courierDeliveryProgress, setCourierDeliveryProgress] = useState<Record<string, SellerCourierProgress>>({});
+  const [courierInfoError, setCourierInfoError] = useState<string | null>(null);
+  const [sellerCouriers, setSellerCouriers] = useState<SellerManagedCourier[]>([]);
+  const [courierManagementLoading, setCourierManagementLoading] = useState(false);
+  const [courierManagementError, setCourierManagementError] = useState<string | null>(null);
+  const [courierManagementMessage, setCourierManagementMessage] = useState<string | null>(null);
+  const [courierInviteLoading, setCourierInviteLoading] = useState(false);
+  const [courierInviteName, setCourierInviteName] = useState('');
+  const [courierInviteEmail, setCourierInviteEmail] = useState('');
+  const [selectedCourierIds, setSelectedCourierIds] = useState<Record<string, string>>({});
+  const [courierAssignmentRefresh, setCourierAssignmentRefresh] = useState(0);
   const [selectedAuction, setSelectedAuction] = useState<Listing | null>(null);
   const [barterUpdatingId, setBarterUpdatingId] = useState<string | null>(null);
   const [barterErrors, setBarterErrors] = useState<Record<string, string>>({});
@@ -32,6 +81,28 @@ export function DashboardPage() {
   }>>({});
   const [moderationNoticeError, setModerationNoticeError] = useState<string | null>(null);
   const [editingSellerProfile, setEditingSellerProfile] = useState(false);
+
+  const loadSellerCouriers = useCallback(async () => {
+    if (!user) {
+      setSellerCouriers([]);
+      setCourierManagementLoading(false);
+      return;
+    }
+
+    setCourierManagementLoading(true);
+    const { data, error } = await supabase.rpc('seller_list_couriers');
+    if (error) {
+      setCourierManagementError(`Could not load your drivers: ${error.message}`);
+    } else {
+      setSellerCouriers((data as SellerManagedCourier[]) || []);
+      setCourierManagementError(null);
+    }
+    setCourierManagementLoading(false);
+  }, [user]);
+
+  useEffect(() => {
+    if (boutique) void loadSellerCouriers();
+  }, [boutique, loadSellerCouriers]);
 
   useEffect(() => {
     async function load() {
@@ -85,19 +156,205 @@ export function DashboardPage() {
           setModerationUpdates({});
         }
 
-        const { data: orderData } = await supabase
-          .from('orders')
-          .select('*, listings(title), profiles(display_name)')
-          .eq('boutique_id', (boutiqueData as Boutique).id)
-          .order('created_at', { ascending: false })
-          .limit(10);
-        setOrders((orderData as SellerOrder[]) || []);
+        const { data: summary, error: summaryError } = await supabase.rpc('seller_dashboard_summary');
+        if (summaryError) setSalesSummaryError(`Could not load sales totals: ${summaryError.message}`);
+        else setGmvTotal(Number(summary?.[0]?.gross_sales || 0));
       }
 
       setLoading(false);
     }
     if (!authLoading) load();
   }, [user, authLoading]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadSellerOrders() {
+      if (!boutique) return;
+      setOrderLoading(true);
+      setOrderLoadError(null);
+      let query = supabase
+        .from('orders')
+        .select('*, listings(title), profiles(display_name)', { count: 'exact' })
+        .eq('boutique_id', boutique.id)
+        .order('created_at', { ascending: false })
+        .range(orderPage * SELLER_ORDER_PAGE_SIZE, (orderPage + 1) * SELLER_ORDER_PAGE_SIZE - 1);
+      if (orderStatusFilter !== 'all') query = query.eq('status', orderStatusFilter);
+      const { data, error, count } = await query;
+      if (!active) return;
+      if (error) {
+        setOrderLoadError(`Could not load seller transaction history: ${error.message}`);
+        setOrders([]);
+        setOrderCount(0);
+        setOrderLoading(false);
+        return;
+      }
+
+      const loadedOrders = (data as SellerOrder[]) || [];
+      setOrders(loadedOrders);
+      setCourierPickupInfos({});
+      setCourierDeliveryProgress({});
+      setCourierInfoError(null);
+      const allCourierOrders = loadedOrders.filter((order) => order.delivery_method === 'courier');
+      if (allCourierOrders.length > 0) {
+        const { data: jobData, error: jobError } = await supabase
+          .from('delivery_jobs')
+          .select('id, order_id, courier_id, status, tracking_code')
+          .in('order_id', allCourierOrders.map((order) => order.id));
+        if (!active) return;
+        if (jobError) {
+          setCourierInfoError(`Could not load courier progress: ${jobError.message}`);
+        } else {
+          const jobs = (jobData || []) as {
+            id: string; order_id: string; courier_id: string; status: string; tracking_code: string;
+          }[];
+          const { data: eventData, error: eventError } = jobs.length > 0
+            ? await supabase
+              .from('delivery_job_events')
+              .select('id, delivery_job_id, event_type, created_at')
+              .in('delivery_job_id', jobs.map((job) => job.id))
+              .order('created_at', { ascending: true })
+            : { data: [], error: null };
+          if (!active) return;
+          if (eventError) {
+            setCourierInfoError(`Could not load courier event history: ${eventError.message}`);
+          }
+          const eventsByJob = new Map<string, SellerCourierProgress['events']>();
+          (eventData || []).forEach((event) => {
+            const events = eventsByJob.get(event.delivery_job_id) || [];
+            events.push(event as SellerCourierProgress['events'][number]);
+            eventsByJob.set(event.delivery_job_id, events);
+          });
+          const progress: Record<string, SellerCourierProgress> = {};
+          jobs.forEach((job) => {
+            progress[job.order_id] = {
+              courier_id: job.courier_id,
+              status: job.status,
+              tracking_code: job.tracking_code,
+              events: eventsByJob.get(job.id) || [],
+            };
+          });
+          setCourierDeliveryProgress(progress);
+        }
+      }
+      const courierOrders = loadedOrders.filter((order) =>
+        order.delivery_method === 'courier' && order.status === 'escrow_held');
+      if (courierOrders.length > 0) {
+        const pickupResults = await Promise.all(courierOrders.map(async (order) => {
+          const result = await supabase.rpc('get_seller_delivery_pickup_code', { p_order_id: order.id });
+          return { orderId: order.id, ...result };
+        }));
+        if (!active) return;
+        const pickupInfos: Record<string, SellerCourierPickupInfo> = {};
+        for (const result of pickupResults) {
+          if (result.error) {
+            setCourierInfoError(`Could not load courier pickup details: ${result.error.message}`);
+            break;
+          }
+          const info = (result.data as SellerCourierPickupInfo[] | null)?.[0];
+          if (info) pickupInfos[result.orderId] = info;
+        }
+        setCourierPickupInfos(pickupInfos);
+      }
+      setOrderCount(count || 0);
+      if (loadedOrders.length > 0) {
+        const { data: reviewData, error: reviewError } = await supabase
+          .from('buyer_reviews')
+          .select('order_id')
+          .in('order_id', loadedOrders.map((order) => order.id));
+        if (!active) return;
+        if (reviewError) {
+          setOrderLoadError(`Could not load buyer feedback status: ${reviewError.message}`);
+        } else {
+          setReviewedBuyerOrderIds((reviewData || []).map((review) => review.order_id));
+        }
+      } else {
+        setReviewedBuyerOrderIds([]);
+      }
+      setOrderLoading(false);
+    }
+    void loadSellerOrders();
+    return () => { active = false; };
+  }, [boutique, courierAssignmentRefresh, orderPage, orderStatusFilter]);
+
+  async function inviteCourier(event: React.FormEvent) {
+    event.preventDefault();
+    setCourierInviteLoading(true);
+    setCourierManagementError(null);
+    setCourierManagementMessage(null);
+    try {
+      const { data, error } = await supabase.functions.invoke('invite-courier', {
+        body: { displayName: courierInviteName, email: courierInviteEmail },
+      });
+      if (error) throw new Error(error.message);
+      setCourierManagementMessage(data?.message || 'Driver invitation sent.');
+      setCourierInviteName('');
+      setCourierInviteEmail('');
+      await loadSellerCouriers();
+    } catch (error) {
+      setCourierManagementError(error instanceof Error ? error.message : 'Could not invite this driver.');
+    } finally {
+      setCourierInviteLoading(false);
+    }
+  }
+
+  async function linkExistingCourier() {
+    setCourierInviteLoading(true);
+    setCourierManagementError(null);
+    setCourierManagementMessage(null);
+    try {
+      const { error } = await supabase.rpc('seller_link_existing_courier', {
+        p_email: courierInviteEmail,
+      });
+      if (error) throw new Error(error.message);
+      setCourierManagementMessage('Existing driver account linked to your boutique.');
+      setCourierInviteEmail('');
+      await loadSellerCouriers();
+    } catch (error) {
+      setCourierManagementError(error instanceof Error ? error.message : 'Could not link this courier account.');
+    } finally {
+      setCourierInviteLoading(false);
+    }
+  }
+
+  async function toggleCourierActive(courier: SellerManagedCourier) {
+    setCourierManagementError(null);
+    setCourierManagementMessage(null);
+    const { error } = await supabase.rpc('seller_set_courier_active', {
+      p_courier_id: courier.courier_id,
+      p_is_active: !courier.is_active,
+    });
+    if (error) {
+      setCourierManagementError(error.message);
+    } else {
+      setCourierManagementMessage(courier.is_active ? 'Driver paused.' : 'Driver reactivated.');
+      await loadSellerCouriers();
+    }
+  }
+
+  async function assignSellerCourier(order: SellerOrder) {
+    const courierId = selectedCourierIds[order.id] || courierDeliveryProgress[order.id]?.courier_id;
+    if (!courierId) {
+      setOrderActionErrors((current) => ({ ...current, [order.id]: 'Choose one of your active drivers.' }));
+      return;
+    }
+    setOrderActionLoading(order.id);
+    setOrderActionErrors((current) => ({ ...current, [order.id]: '' }));
+    try {
+      const { error } = await supabase.rpc('seller_assign_delivery_courier', {
+        p_order_id: order.id,
+        p_courier_id: courierId,
+      });
+      if (error) throw new Error(error.message);
+      setCourierAssignmentRefresh((current) => current + 1);
+    } catch (error) {
+      setOrderActionErrors((current) => ({
+        ...current,
+        [order.id]: error instanceof Error ? error.message : 'Could not assign this driver.',
+      }));
+    } finally {
+      setOrderActionLoading(null);
+    }
+  }
 
   async function markOrderShipped(order: SellerOrder) {
     const trackingNumber = trackingNumbers[order.id]?.trim();
@@ -156,6 +413,73 @@ export function DashboardPage() {
       setOrderActionLoading(null);
     }
   }
+
+  async function submitBuyerReview(order: SellerOrder) {
+    setBuyerReviewSubmittingId(order.id);
+    setBuyerReviewErrors((current) => ({ ...current, [order.id]: '' }));
+    try {
+      const { error } = await supabase.rpc('submit_buyer_review', {
+        p_order_id: order.id,
+        p_rating: buyerReviewRatings[order.id] || 5,
+        p_body: buyerReviewBodies[order.id] || '',
+      });
+      if (error) throw error;
+      setReviewedBuyerOrderIds((current) => [...current, order.id]);
+    } catch (error) {
+      setBuyerReviewErrors((current) => ({
+        ...current,
+        [order.id]: error instanceof Error ? error.message : 'Could not submit buyer feedback.',
+      }));
+    } finally {
+      setBuyerReviewSubmittingId(null);
+    }
+  }
+
+  const handleLockerQrScan = useCallback(async (value: string) => {
+    setLockerQrMessage(null);
+    let payload: unknown;
+    try {
+      payload = JSON.parse(value);
+    } catch {
+      setLockerQrMessage('That QR code is not a ThriftSync locker drop-off code.');
+      setLockerQrScannerOpen(false);
+      return;
+    }
+    if (!payload || typeof payload !== 'object') {
+      setLockerQrMessage('That QR code is not a ThriftSync locker drop-off code.');
+      setLockerQrScannerOpen(false);
+      return;
+    }
+    const code = payload as Record<string, unknown>;
+    if (
+      code.type !== 'thrift-locker-dropoff'
+      || typeof code.orderId !== 'string'
+      || typeof code.pin !== 'string'
+      || !/^\d{6}$/.test(code.pin)
+    ) {
+      setLockerQrMessage('That QR code is incomplete or invalid.');
+      setLockerQrScannerOpen(false);
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase.rpc('mark_order_locker_dropped_off', {
+        p_order_id: code.orderId,
+        p_pin_code: code.pin,
+      });
+      if (error) throw error;
+      const result = data?.[0];
+      if (!result?.success) throw new Error(result?.message || 'Could not confirm locker drop-off.');
+      setOrders((current) => current.map((order) => order.id === code.orderId
+        ? { ...order, status: 'shipped' }
+        : order));
+      setLockerQrMessage(result.message || 'Locker drop-off confirmed.');
+    } catch (error) {
+      setLockerQrMessage(error instanceof Error ? error.message : 'Could not confirm locker drop-off.');
+    } finally {
+      setLockerQrScannerOpen(false);
+    }
+  }, []);
 
   async function toggleBarterAvailability(listing: Listing) {
     setBarterUpdatingId(listing.id);
@@ -247,7 +571,7 @@ export function DashboardPage() {
   const activeListings = listings.filter((l) => l.status === 'active');
   const soldListings = listings.filter((l) => l.status === 'sold' || l.status === 'exchanged');
   const totalViews = listings.reduce((sum, l) => sum + (l.views || 0), 0);
-  const gmv = orders.reduce((sum, o) => sum + Number(o.amount), 0);
+  const gmv = gmvTotal;
   const conversionRate = totalViews > 0 ? ((soldListings.length / totalViews) * 100).toFixed(1) : '0';
 
   return (
@@ -346,6 +670,15 @@ export function DashboardPage() {
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-2">
                       <p className="text-sm font-semibold text-ink-900">{formatPrice(Number(listing.price))}</p>
+                      {!['sold', 'exchanged', 'reserved', 'pending_auction_payment'].includes(listing.status) && (
+                        <button
+                          type="button"
+                          onClick={() => navigate({ name: 'sell', listingId: listing.id })}
+                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-medium text-ink-600 hover:bg-ink-100 hover:text-ink-900"
+                        >
+                          <Pencil className="h-3 w-3" /> Edit listing
+                        </button>
+                      )}
                       {listing.status === 'active' && (
                         <div className="flex items-center gap-1">
                           {listing.listing_type === 'auction' && (
@@ -428,17 +761,135 @@ export function DashboardPage() {
           </div>
         </div>
 
-        {/* Recent orders */}
+        {/* Seller transaction history */}
         <div className="lg:col-span-1">
           <div className="card overflow-hidden">
-            <div className="p-4 border-b border-ink-100">
-              <h2 className="text-sm font-medium text-ink-900">Recent Orders</h2>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-ink-100 p-4">
+              <div>
+                <h2 className="text-sm font-medium text-ink-900">Transaction History</h2>
+                <p className="text-xs text-ink-500">{orderCount} total orders</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  aria-label="Filter seller transactions by status"
+                  value={orderStatusFilter}
+                  onChange={(event) => {
+                    setOrderStatusFilter(event.target.value);
+                    setOrderPage(0);
+                  }}
+                  className="input-field w-auto py-1.5 text-xs"
+                >
+                  <option value="all">All statuses</option>
+                  {['pending_payment', 'payment_expired', 'escrow_held', 'shipped', 'delivered', 'completed', 'disputed', 'refunded'].map((status) => (
+                    <option key={status} value={status}>{status.replace(/_/g, ' ')}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLockerQrMessage(null);
+                    setLockerQrScannerOpen(true);
+                  }}
+                  className="btn-secondary inline-flex items-center gap-1 px-2 py-1.5 text-xs"
+                >
+                  <Camera className="h-3.5 w-3.5" /> Scan QR
+                </button>
+              </div>
             </div>
+            {boutique && (
+              <section className="border-b border-ink-100 bg-ink-50/50 p-4">
+                <div className="mb-3">
+                  <h3 className="text-sm font-medium text-ink-900">Your delivery drivers</h3>
+                  <p className="mt-1 text-xs text-ink-500">
+                    Invite a new driver or link an existing courier account. Only your active drivers can be assigned to your orders.
+                  </p>
+                </div>
+                <form onSubmit={(event) => void inviteCourier(event)} className="grid gap-2 sm:grid-cols-2">
+                  <input
+                    value={courierInviteName}
+                    onChange={(event) => setCourierInviteName(event.target.value)}
+                    placeholder="Driver's name"
+                    aria-label="Driver name"
+                    minLength={2}
+                    maxLength={80}
+                    required
+                    className="input-field text-xs"
+                  />
+                  <input
+                    type="email"
+                    value={courierInviteEmail}
+                    onChange={(event) => setCourierInviteEmail(event.target.value)}
+                    placeholder="Driver's email"
+                    aria-label="Driver email"
+                    maxLength={254}
+                    required
+                    className="input-field text-xs"
+                  />
+                  <button
+                    type="submit"
+                    disabled={courierInviteLoading || courierManagementLoading}
+                    className="btn-primary text-xs"
+                  >
+                    {courierInviteLoading ? 'Sending invite…' : 'Invite a new driver'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void linkExistingCourier()}
+                    disabled={courierInviteLoading || courierManagementLoading || !courierInviteEmail.trim()}
+                    className="btn-secondary text-xs"
+                  >
+                    Link existing courier by email
+                  </button>
+                </form>
+                {courierManagementError && (
+                  <p role="alert" className="mt-3 rounded-lg bg-terracotta-50 p-2 text-xs text-terracotta-700">
+                    {courierManagementError}
+                  </p>
+                )}
+                {courierManagementMessage && (
+                  <p role="status" className="mt-3 rounded-lg bg-sage-50 p-2 text-xs text-sage-700">
+                    {courierManagementMessage}
+                  </p>
+                )}
+                <div className="mt-3 divide-y divide-ink-100 rounded-lg border border-ink-100 bg-white">
+                  {courierManagementLoading ? (
+                    <p className="p-3 text-xs text-ink-500">Loading drivers…</p>
+                  ) : sellerCouriers.length === 0 ? (
+                    <p className="p-3 text-xs text-ink-500">No drivers are linked to your boutique yet.</p>
+                  ) : sellerCouriers.map((courier) => (
+                    <div key={courier.courier_id} className="flex items-center justify-between gap-3 p-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-medium text-ink-800">{courier.display_name || 'Unnamed driver'}</p>
+                        <p className="text-[10px] text-ink-500">
+                          {courier.account_role === 'courier' && courier.account_status === 'active'
+                            ? courier.is_active ? 'Ready for assignments' : 'Paused'
+                            : 'Account unavailable'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void toggleCourierActive(courier)}
+                        disabled={courier.account_role !== 'courier' || courier.account_status !== 'active'}
+                        className="btn-secondary shrink-0 px-2 py-1 text-[10px]"
+                      >
+                        {courier.is_active ? 'Pause' : 'Reactivate'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+            {orderLoadError && <p role="alert" className="border-b border-terracotta-100 bg-terracotta-50 p-3 text-xs text-terracotta-700">{orderLoadError}</p>}
+            {courierInfoError && <p role="alert" className="border-b border-terracotta-100 bg-terracotta-50 p-3 text-xs text-terracotta-700">{courierInfoError}</p>}
+            {salesSummaryError && <p role="alert" className="border-b border-terracotta-100 bg-terracotta-50 p-3 text-xs text-terracotta-700">{salesSummaryError}</p>}
+            {lockerQrMessage && <p role="status" className="border-b border-sage-100 bg-sage-50 p-3 text-xs text-sage-700">{lockerQrMessage}</p>}
             <div className="divide-y divide-ink-100">
-              {orders.length === 0 ? (
+              {orderLoading ? (
+                <div className="p-6 text-center text-xs text-ink-500">Loading transactions…</div>
+              ) : orders.length === 0 ? (
                 <div className="p-6 text-center">
                   <Clock className="w-8 h-8 text-ink-300 mx-auto mb-2" />
-                  <p className="text-xs text-ink-500">No orders yet</p>
+                  <p className="text-xs text-ink-500">{orderCount === 0 ? 'No orders match this filter.' : 'No more transactions on this page.'}</p>
                 </div>
               ) : (
                 orders.map((order) => (
@@ -467,7 +918,9 @@ export function DashboardPage() {
                     )}
                     {order.payment_method === 'cash_on_delivery' && (
                       <p className="mt-1 text-[10px] font-medium text-blue-700">
-                        Collect {formatPrice(Number(order.amount))} when the buyer receives the item.
+                        {order.delivery_method === 'courier'
+                          ? `The assigned courier collects ${formatPrice(Number(order.amount))} from the buyer.`
+                          : `Collect ${formatPrice(Number(order.amount))} when the buyer receives the item.`}
                       </p>
                     )}
                     <p className="text-xs text-ink-400">{formatTimeAgo(order.created_at)}</p>
@@ -479,7 +932,7 @@ export function DashboardPage() {
                         }}
                         className="mt-3 space-y-2"
                       >
-                        <p className="text-xs text-ink-500">Enter the PIN provided by the buyer after you place the item in the selected locker.</p>
+                        <p className="text-xs text-ink-500">Enter the buyer’s PIN or scan their QR code after placing the item in the selected locker.</p>
                         <div className="flex gap-2">
                           <input
                             value={lockerPins[order.id] || ''}
@@ -506,7 +959,95 @@ export function DashboardPage() {
                         )}
                       </form>
                     )}
-                    {order.status === 'escrow_held' && order.delivery_method !== 'locker' && (
+                    {order.delivery_method === 'courier' && (
+                      <div className="mt-3 rounded-lg border border-sage-200 bg-sage-50 p-3">
+                        <p className="text-xs font-medium text-sage-900">
+                          Delivery progress: {courierDeliveryProgress[order.id]?.status.replace(/_/g, ' ') || 'waiting for driver assignment'}
+                        </p>
+                        {order.status === 'escrow_held'
+                          && (!courierDeliveryProgress[order.id]
+                            || ['assigned', 'accepted', 'cancelled'].includes(courierDeliveryProgress[order.id].status)) && (
+                          <form
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              void assignSellerCourier(order);
+                            }}
+                            className="mt-2 flex flex-col gap-2 sm:flex-row"
+                          >
+                            <select
+                              aria-label={`Driver for ${order.listings?.title || 'order'}`}
+                              value={selectedCourierIds[order.id] || courierDeliveryProgress[order.id]?.courier_id || ''}
+                              onChange={(event) => setSelectedCourierIds((current) => ({
+                                ...current,
+                                [order.id]: event.target.value,
+                              }))}
+                              required
+                              className="input-field min-w-0 flex-1 text-xs"
+                            >
+                              <option value="">Choose one of your drivers</option>
+                              {sellerCouriers
+                                .filter((courier) => courier.account_role === 'courier'
+                                  && courier.account_status === 'active'
+                                  && courier.is_active)
+                                .map((courier) => (
+                                  <option key={courier.courier_id} value={courier.courier_id}>
+                                    {courier.display_name}
+                                  </option>
+                                ))}
+                            </select>
+                            <button
+                              type="submit"
+                              disabled={orderActionLoading === order.id || !sellerCouriers.some((courier) =>
+                                courier.account_role === 'courier'
+                                && courier.account_status === 'active'
+                                && courier.is_active)}
+                              className="btn-primary shrink-0 text-xs"
+                            >
+                              {orderActionLoading === order.id
+                                ? 'Assigning…'
+                                : courierDeliveryProgress[order.id] ? 'Change driver' : 'Assign driver'}
+                            </button>
+                          </form>
+                        )}
+                        {order.status === 'escrow_held' && !courierDeliveryProgress[order.id]
+                          && !sellerCouriers.some((courier) => courier.account_role === 'courier'
+                            && courier.account_status === 'active'
+                            && courier.is_active) && (
+                          <p className="mt-2 text-xs text-sage-800">Invite or link an active driver above to assign this delivery.</p>
+                        )}
+                        {orderActionErrors[order.id] && (
+                          <p role="alert" className="mt-2 text-xs text-terracotta-700">{orderActionErrors[order.id]}</p>
+                        )}
+                        {courierDeliveryProgress[order.id]?.tracking_code && (
+                          <p className="mt-1 font-mono text-[10px] text-sage-700">
+                            Tracking: {courierDeliveryProgress[order.id].tracking_code}
+                          </p>
+                        )}
+                        {courierDeliveryProgress[order.id]?.events.length > 0 && (
+                          <ol className="mt-2 space-y-1 border-t border-sage-200 pt-2">
+                            {courierDeliveryProgress[order.id].events.map((event) => (
+                              <li key={event.id} className="text-[10px] text-sage-800">
+                                {event.event_type.replace(/_/g, ' ')} · {new Date(event.created_at).toLocaleString()}
+                              </li>
+                            ))}
+                          </ol>
+                        )}
+                        {courierPickupInfos[order.id] ? (
+                          <div className="mt-2 border-t border-sage-200 pt-2">
+                            <p className="text-xs font-medium text-sage-900">
+                              Driver assigned: {courierPickupInfos[order.id].courier_name}
+                            </p>
+                            <p className="mt-1 text-xs text-sage-800">
+                              Give the courier this pickup code in person when handing over the parcel:
+                              <span className="ml-1 font-mono font-bold tracking-wider">{courierPickupInfos[order.id].pickup_code}</span>
+                            </p>
+                          </div>
+                        ) : order.status === 'escrow_held' && !courierDeliveryProgress[order.id] ? (
+                          <p className="mt-2 text-xs text-sage-800">Waiting for you to assign one of your active drivers.</p>
+                        ) : null}
+                      </div>
+                    )}
+                    {order.status === 'escrow_held' && order.delivery_method !== 'locker' && order.delivery_method !== 'courier' && (
                       <form
                         onSubmit={(event) => {
                           event.preventDefault();
@@ -538,10 +1079,75 @@ export function DashboardPage() {
                         )}
                       </form>
                     )}
+                    {order.status === 'completed' && (
+                      <div className="mt-3 border-t border-ink-100 pt-3">
+                        {reviewedBuyerOrderIds.includes(order.id) ? (
+                          <p className="text-xs text-sage-700">Buyer feedback submitted for this completed order.</p>
+                        ) : (
+                          <form
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              void submitBuyerReview(order);
+                            }}
+                            className="space-y-2"
+                          >
+                            <div>
+                              <p className="text-xs font-medium text-ink-800">Rate this buyer</p>
+                              <p className="text-[10px] text-ink-500">Only available after a completed order.</p>
+                            </div>
+                            <div className="flex" role="group" aria-label="Buyer rating">
+                              {[1, 2, 3, 4, 5].map((rating) => (
+                                <button
+                                  key={rating}
+                                  type="button"
+                                  onClick={() => setBuyerReviewRatings((current) => ({ ...current, [order.id]: rating }))}
+                                  aria-label={`${rating} stars for buyer`}
+                                  className="p-0.5"
+                                >
+                                  <Star className={`h-4 w-4 ${rating <= (buyerReviewRatings[order.id] || 5) ? 'fill-gold-500 text-gold-500' : 'text-ink-200'}`} />
+                                </button>
+                              ))}
+                            </div>
+                            <textarea
+                              value={buyerReviewBodies[order.id] || ''}
+                              onChange={(event) => setBuyerReviewBodies((current) => ({ ...current, [order.id]: event.target.value }))}
+                              maxLength={2000}
+                              placeholder="Optional feedback about the transaction"
+                              className="input-field min-h-16 resize-y text-xs"
+                            />
+                            {buyerReviewErrors[order.id] && <p role="alert" className="text-xs text-terracotta-600">{buyerReviewErrors[order.id]}</p>}
+                            <button type="submit" disabled={buyerReviewSubmittingId === order.id} className="btn-secondary text-xs">
+                              {buyerReviewSubmittingId === order.id ? 'Submitting…' : 'Submit buyer rating'}
+                            </button>
+                          </form>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))
               )}
             </div>
+            {orderCount > SELLER_ORDER_PAGE_SIZE && (
+              <div className="flex items-center justify-between border-t border-ink-100 p-3">
+                <button
+                  type="button"
+                  onClick={() => setOrderPage((page) => Math.max(0, page - 1))}
+                  disabled={orderPage === 0 || orderLoading}
+                  className="btn-secondary px-2 py-1 text-xs disabled:opacity-50"
+                >
+                  Previous
+                </button>
+                <span className="text-xs text-ink-500">Page {orderPage + 1} of {Math.ceil(orderCount / SELLER_ORDER_PAGE_SIZE)}</span>
+                <button
+                  type="button"
+                  onClick={() => setOrderPage((page) => page + 1)}
+                  disabled={(orderPage + 1) * SELLER_ORDER_PAGE_SIZE >= orderCount || orderLoading}
+                  className="btn-secondary px-2 py-1 text-xs disabled:opacity-50"
+                >
+                  Next
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Quick actions */}
@@ -558,7 +1164,7 @@ export function DashboardPage() {
                 <Store className="w-4 h-4" /> Edit seller profile
               </button>
               <button onClick={() => navigate({ name: 'orders' })} className="w-full flex items-center gap-2 p-2.5 rounded-lg hover:bg-ink-50 transition-colors text-sm text-ink-700">
-                <Package className="w-4 h-4" /> View all orders
+                <Package className="w-4 h-4" /> View my purchases
               </button>
             </div>
           </div>
@@ -580,6 +1186,9 @@ export function DashboardPage() {
           listingTitle={selectedAuction.title}
           onClose={() => setSelectedAuction(null)}
         />
+      )}
+      {lockerQrScannerOpen && (
+        <LockerQrScanner onScan={handleLockerQrScan} onClose={() => setLockerQrScannerOpen(false)} />
       )}
     </div>
   );

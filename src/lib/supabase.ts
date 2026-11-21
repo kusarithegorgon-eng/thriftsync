@@ -9,11 +9,12 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 export type Profile = {
-  id: string; role: 'buyer' | 'seller' | 'moderator' | 'admin'; display_name: string;
+  id: string; role: 'buyer' | 'seller' | 'courier' | 'moderator' | 'admin'; display_name: string;
   avatar_url: string | null; bio: string | null; default_lat: number | null;
   default_lng: number | null; default_barangay: string | null; is_banned: boolean;
   account_status: 'active' | 'restricted' | 'suspended';
   account_status_updated_at: string; account_restricted_until: string | null;
+  buyer_rating_avg: number; buyer_rating_count: number;
   created_at: string;
 };
 export type Boutique = {
@@ -43,6 +44,7 @@ export type Listing = {
   barter_enabled: boolean;
   moderation_note: string | null; moderated_by: string | null; moderated_at: string | null;
   moderation_hidden_until: string | null;
+  automated_flags: string[];
   sku: string | null; coa_verified: boolean; views: number; created_at: string;
 };
 export type Bid = { id: string; listing_id: string; bidder_id: string; amount: number; is_winning: boolean; created_at: string };
@@ -80,6 +82,19 @@ export type Order = {
   payment_is_simulated: boolean; payment_due_at: string | null; payment_reference: string | null;
   paid_at: string | null; created_at: string;
 };
+export type DeliveryJobStatus = 'assigned' | 'accepted' | 'picked_up' | 'in_transit' | 'delivered' | 'cancelled';
+export type DeliveryJob = {
+  id: string; order_id: string; courier_id: string; status: DeliveryJobStatus;
+  tracking_code: string; accepted_at: string | null; picked_up_at: string | null;
+  in_transit_at: string | null; delivered_at: string | null; cod_collected_at: string | null;
+  delivery_proof_path: string | null; created_by: string | null; created_at: string; updated_at: string;
+};
+export type DeliveryJobEvent = {
+  id: string; delivery_job_id: string; actor_id: string | null;
+  event_type: 'assigned' | 'reassigned' | 'accepted' | 'picked_up' | 'in_transit'
+    | 'pickup_code_failed' | 'delivery_code_failed' | 'delivered';
+  note: string | null; created_at: string;
+};
 export type AuctionWinnerNotification = {
   id: string; recipient_id: string; listing_id: string; order_id: string;
   title: string; body: string; read_at: string | null; created_at: string;
@@ -105,7 +120,7 @@ export type VoucherScope = 'PLATFORM' | 'BOUTIQUE' | 'CATEGORY';
 export type VoucherDiscountType = 'PERCENTAGE' | 'FIXED_AMOUNT';
 export type VoucherStatus = 'ACTIVE' | 'PAUSED' | 'EXPIRED' | 'REVOKED';
 export type VoucherTrigger = 'MANUAL' | 'CART_ABANDONMENT' | 'NEW_USER_WELCOME';
-export type Voucher = { id: string; code: string; description: string | null; discount_type: VoucherDiscountType; discount_value: number; scope: VoucherScope; boutique_id: string | null; category: string | null; auction_eligible: boolean; min_spend: number; max_uses: number | null; max_uses_per_user: number; is_single_use: boolean; trigger_type: VoucherTrigger; expires_at: string | null; status: VoucherStatus; uses: number; created_by: string | null; created_at: string; updated_at: string };
+export type Voucher = { id: string; code: string; description: string | null; discount_type: VoucherDiscountType; discount_value: number; scope: VoucherScope; boutique_id: string | null; category: string | null; auction_eligible: boolean; min_spend: number; max_uses: number | null; max_uses_per_user: number; is_single_use: boolean; trigger_type: VoucherTrigger; expires_at: string | null; status: VoucherStatus; uses: number; created_by: string | null; assigned_user_id: string | null; created_at: string; updated_at: string };
 export type VoucherRedemption = { id: string; voucher_id: string; user_id: string; order_id: string | null; cart_total_at_redemption: number; discount_amount: number; redeemed_at: string };
 export type VoucherValidationResult = { valid: boolean; code: string | null; discount_type: VoucherDiscountType | null; discount_value: number; discount_amount: number; scope: VoucherScope | null; message: string };
 export type CebuBarangay = { id: string; name: string; city_municipality: string; lat: number; lng: number; is_metro_cebu: boolean };
@@ -131,6 +146,15 @@ export type SellerReview = {
   id: string; order_id: string; seller_id: string; reviewer_id: string;
   accuracy_rating: number; communication_rating: number; punctuality_rating: number;
   body: string | null; created_at: string;
+};
+export type BuyerReview = {
+  id: string; order_id: string; buyer_id: string; seller_id: string;
+  rating: number; body: string | null; created_at: string;
+};
+export type LoyaltyLedgerEntry = {
+  id: string; user_id: string; points_delta: number;
+  reason: 'completed_order' | 'reward_redemption'; order_id: string | null;
+  voucher_id: string | null; created_at: string;
 };
 export type LockerLocation = { id: string; partner_name: string; address: string; barangay: string | null; city_municipality: string; lat: number; lng: number; district_id: string | null; operating_hours: Record<string, string>; capacity_total: number; capacity_available: number; is_active: boolean; contact_phone: string | null; created_at: string };
 export type LockerHandoff = { id: string; locker_location_id: string; order_id: string | null; user_id: string; pin_code: string; status: string; drop_off_window_start: string | null; drop_off_window_end: string | null; dropped_off_at: string | null; picked_up_at: string | null; created_at: string };

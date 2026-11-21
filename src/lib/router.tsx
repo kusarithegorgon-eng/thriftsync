@@ -5,8 +5,9 @@ export type Route =
   | { name: 'browse'; category?: string; era?: string; q?: string }
   | { name: 'listing'; id: string }
   | { name: 'boutique'; slug: string }
-  | { name: 'sell' }
+  | { name: 'sell'; listingId?: string }
   | { name: 'dashboard' }
+  | { name: 'courier-deliveries' }
   | { name: 'wishlist' }
   | { name: 'cart' }
   | { name: 'checkout' }
@@ -35,8 +36,12 @@ export function RouterProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const handlePop = () => parseAndSet();
     window.addEventListener('popstate', handlePop);
+    window.addEventListener('hashchange', handlePop);
     parseAndSet();
-    return () => window.removeEventListener('popstate', handlePop);
+    return () => {
+      window.removeEventListener('popstate', handlePop);
+      window.removeEventListener('hashchange', handlePop);
+    };
   }, []);
 
   function parseAndSet() {
@@ -54,9 +59,11 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     } else if (parts[0] === 'boutique' && parts[1]) {
       setRoute({ name: 'boutique', slug: parts[1] });
     } else if (parts[0] === 'sell') {
-      setRoute({ name: 'sell' });
+      setRoute({ name: 'sell', listingId: parts[1] });
     } else if (parts[0] === 'dashboard') {
       setRoute({ name: 'dashboard' });
+    } else if (parts[0] === 'courier-deliveries') {
+      setRoute({ name: 'courier-deliveries' });
     } else if (parts[0] === 'wishlist') {
       setRoute({ name: 'wishlist' });
     } else if (parts[0] === 'cart') {
@@ -103,6 +110,8 @@ export function RouterProvider({ children }: { children: ReactNode }) {
       if (newRoute.q) params.set('q', newRoute.q);
       const qs = params.toString();
       hash = `#/browse${qs ? '?' + qs : ''}`;
+    } else if (newRoute.name === 'sell' && newRoute.listingId) {
+      hash = `#/sell/${encodeURIComponent(newRoute.listingId)}`;
     } else if (newRoute.name === 'listing') {
       hash = `#/listing/${newRoute.id}`;
     } else if (newRoute.name === 'boutique') {

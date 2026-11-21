@@ -27,6 +27,14 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    [`account recovery and enforcement`](./supabase/migrations/20261120130000_account_recovery_enforcement.sql),
    [`moderator policy actions`](./supabase/migrations/20261120140000_moderator_policy_actions.sql),
    [`audit history and admin overview`](./supabase/migrations/20261120150000_audit_history_admin_overview.sql),
+   [`buyer ratings, rewards, and listing signals`](./supabase/migrations/20261121150000_marketplace_trust_growth_features.sql),
+   [`courier delivery workflow`](./supabase/migrations/20261121160000_add_courier_delivery_actor.sql),
+   [`live auction integrity and listing edits`](./supabase/migrations/20261121170000_live_auction_integrity_and_listing_edits.sql),
+   [`seller-managed couriers`](./supabase/migrations/20261121180000_add_seller_managed_couriers.sql),
+   [`shared buyer/seller accounts`](./supabase/migrations/20261121190000_shared_buyer_seller_accounts.sql),
+   [`delivery chat`](./supabase/migrations/20261121200000_add_delivery_chat.sql),
+   [`delivery chat unread state`](./supabase/migrations/20261121210000_delivery_chat_unread_state.sql),
+   [`courier delivery photo proof`](./supabase/migrations/20261121220000_delivery_photo_proof.sql),
    and any later migrations in timestamp order in the Supabase SQL Editor.
 2. Copy `.env.example` to `.env` and set `VITE_SUPABASE_URL` and
    `VITE_SUPABASE_ANON_KEY` from your Supabase project's API settings. The
@@ -50,8 +58,10 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    `{{ .Token }}` value so users receive a one-time code (six digits by default;
    the length follows your Supabase Auth configuration). The EmailJS template
    ID is separate from Supabase Auth and cannot verify accounts.
-   Add the frontend origin to Supabase Auth's allowed redirect URLs so password
-   recovery links return to the app.
+   Add the frontend origin to Supabase Auth's allowed redirect URLs so recovery
+   links and driver invitations return to the app.
+   Configure the Supabase **Invite user** email template to include its
+   confirmation link; invited drivers use it to create their password.
 4. Deploy the `auction-ops` Edge Function in `supabase/functions/auction-ops`
    and set its Supabase secrets as required by that function. Redeploy it after
    updating the function source. Deploy `supabase/functions/thrift-crawl` to
@@ -66,8 +76,9 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    Checkout and only creates the marketplace order after PayMongo reports the
    session as paid. Checkout offers **GCash online** or **Pay on receipt** for
    courier delivery and boutique pickup. Pay-on-receipt orders require the buyer
-   to pay the seller or courier at handoff; the app does not collect or verify
-   that cash payment. To test the
+   to pay the seller or courier at handoff. For courier orders, the courier
+   confirms cash collection in the app, but the app does not hold, transfer, or
+   remit that cash or calculate a seller payout. To test the
    simulated, non-payment GCash flow, set `VITE_GCASH_SIMULATION_ENABLED=true`
    locally with a `pk_test_` public key and set
    `GCASH_SIMULATION_ENABLED=true` and a test-only `sk_test_` secret only in a
@@ -80,6 +91,20 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
    asks for GCash credentials or collects money, and marks resulting orders as
    simulated. The Edge Function also requires a server-side `sk_test_` key.
    Do not enable it in production.
+
+   Deploy `supabase/functions/invite-courier` to the same Supabase project:
+
+   ```sh
+   npx supabase functions deploy invite-courier --no-verify-jwt --project-ref <project-ref>
+   npx supabase secrets set APP_URL=https://your-frontend.example --project-ref <project-ref>
+   ```
+
+   Set `APP_URL` to the frontend origin (use `http://localhost:5173` for local
+   development). It is used only as the trusted redirect target for driver
+   invitation emails and must be allowed in Supabase Auth's redirect URL list.
+   Gateway JWT verification is disabled for this function so unauthenticated
+   browser preflight requests can reach its CORS handler; the function itself
+   still validates the seller's bearer token before processing any POST.
 
    PayMongo checkout reserves each listing for 20 minutes before opening the
    hosted payment page. Deploy the updated `paymongo-checkout` function and
@@ -130,6 +155,90 @@ queries, storage, and Edge Functions. No local MariaDB server or API is needed.
 5. Install Node.js 20 or later, run `npm install`, then run `npm run dev`.
    Open the local URL printed by Vite, usually `http://localhost:5173`.
 
+### Courier delivery workflow
+
+Apply the courier delivery, seller-managed couriers, and shared buyer/seller
+account migrations above, plus the delivery chat, unread-state, and delivery
+photo proof migrations, then deploy `invite-courier`. Every account can shop
+and sell; a user must own an active boutique before the delivery-driver tools
+become available in **Seller Dashboard → Transaction History**. The boutique
+owner can invite a new driver by name and email, or link an existing active
+courier account by its email. The invited driver receives an email link to
+create a password. For each paid courier order, the boutique owner chooses one
+of their active drivers and gives them the
+private pickup code in person. Administrators do not create courier accounts
+or assign drivers to orders. Drivers accept jobs in **Courier Deliveries**,
+verify the pickup code, and confirm arrival with the buyer's private delivery
+code. The buyer sees the delivery code after the driver collects the parcel.
+Delivery progress is recorded in events, and a driver can access only jobs
+assigned by sellers who have linked and activated that driver's account.
+Existing driver assignments are linked to their order's seller when the
+seller-managed couriers migration runs.
+
+To test seller-managed delivery in a development project:
+
+1. Sign in to an account that owns a boutique and open **Seller Dashboard →
+   Transaction History**. Registration no longer asks users to choose buyer
+   or seller; create a boutique from **Start Selling** if the account does not
+   already own one.
+2. Invite a new driver with a name and email. Open the invitation email in a
+   separate browser session, follow the link, and set the driver's password.
+   The driver account should open **Courier Deliveries** with only the
+   **ThriftSync Courier** header and log-out control.
+3. Place a courier order as a buyer and complete its payment so the order is
+   awaiting fulfillment. Sign back in as the seller, select one of your active
+   drivers, and assign the order.
+4. Sign in as that driver and accept the job. In the buyer's **My Orders**,
+   verify **Chat with Courier** opens a slide-over drawer instead of showing
+   messages inside the order card. Leave it closed, send a message from the
+   courier workspace, and verify the buyer sees an unread count that clears
+   after opening the drawer. The chat is private to those two participants;
+   access codes should only be shared at handoff.
+5. Confirm the seller sees the driver's name, tracking code, and private pickup
+   code. Enter the pickup code in the courier workspace.
+   After pickup, verify that the buyer can see the delivery code. At handoff,
+   the driver must take or choose a photo before confirming delivery; verify the
+   buyer and courier can view the saved proof afterward. The photo is private to
+   those participants.
+6. From the seller dashboard, pause the driver after the delivery is complete.
+   Trying to pause a driver with an active delivery should be rejected.
+
+The courier workflow is a manual, in-app process; it does not connect to a
+carrier, generate an airway bill, schedule a pickup, or provide live GPS
+tracking. COD confirmation records that the courier says cash was collected;
+it does not implement a seller wallet, escrow custody, cash remittance, or
+payout settlement. Existing boutique-pickup and locker handoff flows remain
+separate.
+
+### Live auctions, listing edits, and seller search
+
+Apply the live auction integrity and listing edits migration above after the
+courier migration. Bid writes must go through the `place_bid` database
+function; direct client writes are revoked. The function locks the auction
+listing while validating a bid, so simultaneous bids are checked in sequence.
+The anonymous live bid feed intentionally excludes bidder account IDs.
+
+To test the flow in a development project:
+
+1. Sign in as a seller and create an approved English auction. Open its detail
+   page in two separate buyer accounts or browser sessions.
+2. From both sessions, submit the same minimum valid bid at nearly the same
+   time. One bid should succeed; the other should be rejected as out of date
+   after the first bid commits. Confirm both pages update the current bid and
+   bid count without a manual refresh. If Realtime is disconnected, the page
+   falls back to refreshing bids every 15 seconds.
+3. Sign in as the seller, open the seller dashboard, choose **Edit listing**,
+   and save a change to an item with no bids or active/completed orders. It
+   returns to pending review and is hidden from buyers until an administrator
+   approves the updated listing. Legacy photos without complete angle metadata
+   are preserved and cannot be individually edited in this form.
+4. Repeat the edit on an auction that already has a bid or a product with an
+   active/completed order. The database should reject the edit and the seller
+   should see the error.
+5. In **Admin → Listings**, search by seller display name or account ID and
+   optionally select a minimum seller rating. Results show the seller and
+   aggregate rating/review count alongside each matching product.
+
 To load sample marketplace data, run [`supabase/seed_demo_data.sql`](./supabase/seed_demo_data.sql)
 in the Supabase SQL Editor after applying the migrations. The script is safe to
 rerun; it creates clearly labeled demo profiles, boutiques, eight product
@@ -141,21 +250,32 @@ policies.
 
 Use a development/demo Supabase project and apply
 [`20261014000000_connect_locker_checkout_and_fulfillment.sql`](./supabase/migrations/20261014000000_connect_locker_checkout_and_fulfillment.sql)
-first. Create two separate ThriftSync accounts: one with the `buyer` profile
-role and one with the `seller` profile role. In
+first. Create two separate ThriftSync accounts; create a boutique from
+**Start Selling** on the account that will handle seller fulfillment. In
 [`supabase/seed_demo_locker_flow.sql`](./supabase/seed_demo_locker_flow.sql),
 replace the two example email values at the top with those account emails, then
 run the script in the Supabase SQL Editor.
 
 The script adds one clearly labeled demo order and a pending locker handoff to
-those accounts. Sign in as the buyer and open **My Orders** to see the locker
-address and demo PIN `482915`. Sign in as the seller and open the seller
-dashboard, enter that PIN under the demo order, and confirm the drop-off. Return
-to the buyer account; the order will be ready for locker pickup. Enter the same
-PIN in **My Orders** to confirm pickup and finish the status flow. This is a UI
-workflow demo only: it does not charge a payment method or connect to physical
-locker hardware. The SQL seed is intentionally not a reset script; it will not
-reopen or overwrite the demo order after you progress it.
+those accounts. Sign in as the order's buyer and open **My Orders** to see the locker
+address and demo PIN `482915` with a QR code. Sign in as the seller and open the
+seller dashboard. Scan the buyer's QR code to record drop-off, or enter the PIN
+manually as a fallback. Return to the buyer account; the order will be ready for
+locker pickup. Enter the same PIN in **My Orders** to confirm pickup and finish
+the status flow. Camera scanning requires a secure browser context (HTTPS or
+localhost). This is a UI workflow demo only: it does not charge a payment
+method or connect to physical locker hardware. The SQL seed is intentionally
+not a reset script; it will not reopen or overwrite the demo order after you
+progress it.
+
+### Buyer trust and rewards
+
+Sellers can rate buyers after completed orders; buyer profile pages show the
+verified aggregate. Completed orders earn 1 point per ₱100 of order value.
+Redeeming 100 points creates a private ₱25 voucher with a ₱50 minimum cart and
+a 90-day expiry. The seller moderation queue also shows deterministic policy
+keyword signals as prompts for human review; these signals never reject a
+listing automatically.
 
 ### What the Thrift Crawl Planner is for
 

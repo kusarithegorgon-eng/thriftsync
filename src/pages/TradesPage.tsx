@@ -9,7 +9,7 @@ import {
 } from '@/lib/supabase';
 import { formatPrice, formatTimeAgo } from '@/lib/utils';
 
-type BarterListing = Pick<Listing, 'id' | 'title' | 'images' | 'price' | 'barter_enabled' | 'status' | 'listing_type'>;
+type BarterListing = Pick<Listing, 'id' | 'title' | 'images' | 'price' | 'barter_enabled' | 'status' | 'listing_type' | 'category' | 'era'>;
 
 const STATUS_LABELS: Record<string, string> = {
   PENDING: 'Awaiting response',
@@ -26,6 +26,7 @@ export function TradesPage({ requestedListingId }: { requestedListingId?: string
   const { navigate } = useRouter();
   const [offers, setOffers] = useState<TradeOfferWithItems[]>([]);
   const [myListings, setMyListings] = useState<BarterListing[]>([]);
+  const [recommendedListings, setRecommendedListings] = useState<Listing[]>([]);
   const [requestedListing, setRequestedListing] = useState<BarterListing | null>(null);
   const [offeredListingId, setOfferedListingId] = useState('');
   const [loading, setLoading] = useState(true);
@@ -69,13 +70,14 @@ export function TradesPage({ requestedListingId }: { requestedListingId?: string
     const boutiqueIds = (boutiques || []).map((boutique) => boutique.id);
     if (boutiqueIds.length === 0) {
       setMyListings([]);
+      setRecommendedListings([]);
       setLoading(false);
       return;
     }
 
     const { data: listingData, error: listingsError } = await supabase
       .from('listings')
-      .select('id, title, images, price, barter_enabled, status, listing_type')
+      .select('id, title, images, price, barter_enabled, status, listing_type, category, era')
       .in('boutique_id', boutiqueIds)
       .eq('status', 'active')
       .eq('moderation_status', 'approved')
@@ -86,7 +88,43 @@ export function TradesPage({ requestedListingId }: { requestedListingId?: string
     if (listingsError) {
       setError(`Could not load your available barter listings: ${listingsError.message}`);
     } else {
-      setMyListings((listingData as BarterListing[]) || []);
+      const ownedListings = (listingData as BarterListing[]) || [];
+      setMyListings(ownedListings);
+      if (ownedListings.length > 0) {
+        const { data: candidateData, error: candidateError } = await supabase
+          .from('listings')
+          .select('*, boutiques(id, name, slug, logo_url, seller_id, seller_rating_avg, seller_rating_count)')
+          .eq('status', 'active')
+          .eq('moderation_status', 'approved')
+          .eq('listing_type', 'fixed')
+          .eq('barter_enabled', true)
+          .not('boutique_id', 'in', `(${boutiqueIds.join(',')})`)
+          .limit(100);
+        if (candidateError) {
+          setError(`Could not load barter recommendations: ${candidateError.message}`);
+          setRecommendedListings([]);
+        } else {
+          const candidates = (candidateData || []) as Listing[];
+          const scored = candidates.map((candidate) => {
+            const score = Math.max(...ownedListings.map((ownListing) => {
+              let match = 0;
+              if (ownListing.category && candidate.category === ownListing.category) match += 4;
+              if (ownListing.era && candidate.era === ownListing.era) match += 2;
+              const priceRatio = Number(candidate.price) / Math.max(Number(ownListing.price), 1);
+              if (priceRatio >= 0.5 && priceRatio <= 2) match += 1;
+              return match;
+            }));
+            return { candidate, score };
+          });
+          setRecommendedListings(scored
+            .filter((entry) => entry.score > 0)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 6)
+            .map((entry) => entry.candidate));
+        }
+      } else {
+        setRecommendedListings([]);
+      }
     }
     setLoading(false);
   }, [user]);
@@ -104,7 +142,7 @@ export function TradesPage({ requestedListingId }: { requestedListingId?: string
       }
       const { data, error: listingError } = await supabase
         .from('listings')
-        .select('id, title, images, price, barter_enabled, status, listing_type')
+        .select('id, title, images, price, barter_enabled, status, listing_type, category, era')
         .eq('id', requestedListingId)
         .maybeSingle();
       if (cancelled) return;
@@ -303,6 +341,30 @@ export function TradesPage({ requestedListingId }: { requestedListingId?: string
             onConfirm={confirmExchange}
             onMessage={messageTradePartner}
           />
+          {recommendedListings.length > 0 && (
+            <section>
+              <h2 className="mb-1 text-lg font-semibold text-ink-900">Suggested barter matches</h2>
+              <p className="mb-3 text-xs text-ink-500">Matched to your active barter listings by category, era, and price range.</p>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {recommendedListings.map((listing) => (
+                  <article key={listing.id} className="card overflow-hidden">
+                    {listing.images[0] && <img src={listing.images[0]} alt="" className="h-36 w-full object-cover" />}
+                    <div className="p-3">
+                      <h3 className="truncate text-sm font-medium text-ink-900">{listing.title}</h3>
+                      <p className="mt-1 text-xs text-ink-500">{formatPrice(Number(listing.price))}</p>
+                      <button
+                        type="button"
+                        onClick={() => navigate({ name: 'trades', listingId: listing.id })}
+                        className="btn-secondary mt-3 w-full text-xs"
+                      >
+                        Make an offer
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
       )}
     </div>

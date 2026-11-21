@@ -16,6 +16,7 @@ import { OrdersPage } from '@/pages/OrdersPage';
 import { TradesPage } from '@/pages/TradesPage';
 import { SellPage } from '@/pages/SellPage';
 import { DashboardPage } from '@/pages/DashboardPage';
+import { CourierDeliveriesPage } from '@/pages/CourierDeliveriesPage';
 import { VouchersPage } from '@/pages/VouchersPage';
 import { ThriftCrawlPage } from '@/pages/ThriftCrawlPage';
 import { LockerNetworkPage } from '@/pages/LockerNetworkPage';
@@ -25,6 +26,7 @@ import { ContactPage } from '@/pages/ContactPage';
 import { MessagesPage } from '@/pages/MessagesPage';
 import { ProfilePage } from '@/pages/ProfilePage';
 import { CookieNotice } from '@/components/CookieNotice';
+import { CourierLayout } from '@/components/CourierLayout';
 
 function RouteRenderer() {
   const { route, navigate } = useRouter();
@@ -58,9 +60,11 @@ function RouteRenderer() {
     case 'contact':
       return <ContactPage />;
     case 'sell':
-      return <SellPage />;
+      return <SellPage listingId={route.listingId} />;
     case 'dashboard':
       return <DashboardPage />;
+    case 'courier-deliveries':
+      return <CourierDeliveriesPage />;
     case 'vouchers':
       return <VouchersPage />;
     case 'thrift-crawl':
@@ -111,20 +115,36 @@ function AccountRestrictionNotice() {
   );
 }
 
+function AppShell() {
+  const { route } = useRouter();
+
+  if (route.name === 'courier-deliveries') {
+    return (
+      <CourierLayout>
+        <RouteRenderer />
+      </CourierLayout>
+    );
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col bg-cream">
+      <Header />
+      <AccountRestrictionNotice />
+      <main className="flex-1">
+        <RouteRenderer />
+      </main>
+      <Footer />
+      <CookieNotice />
+    </div>
+  );
+}
+
 function App() {
   return (
     <AuthProvider>
       <RouterProvider>
         <CartProvider>
-          <div className="min-h-screen flex flex-col bg-cream">
-            <Header />
-            <AccountRestrictionNotice />
-            <main className="flex-1">
-              <RouteRenderer />
-            </main>
-            <Footer />
-            <CookieNotice />
-          </div>
+          <AppShell />
         </CartProvider>
       </RouterProvider>
     </AuthProvider>

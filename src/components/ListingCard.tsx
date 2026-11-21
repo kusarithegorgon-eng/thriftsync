@@ -18,19 +18,53 @@ export function ListingCard({ listing }: { listing: ListingWithBoutique }) {
   const auctionActive = isAuctionActive(listing);
 
   useEffect(() => {
-    if (isAuction && !isDutch) {
-      supabase
+    if (!isAuction || isDutch) return;
+
+    let active = true;
+    let subscribed = false;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const refreshBidSummary = async () => {
+      const { data } = await supabase
         .from('public_auction_bids')
         .select('amount')
         .eq('listing_id', listing.id)
-        .order('amount', { ascending: false })
-        .then(({ data }) => {
-          if (data && data.length > 0) {
-            setCurrentBid(Number(data[0].amount));
-            setBidCount(data.length);
-          }
-        });
-    }
+        .order('amount', { ascending: false });
+      if (!active) return;
+      setCurrentBid(data?.length ? Number(data[0].amount) : null);
+      setBidCount(data?.length || 0);
+    };
+
+    void refreshBidSummary();
+    const channel = supabase
+      .channel(`auction-card-feed-${listing.id}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'auction_bid_feed',
+        filter: `listing_id=eq.${listing.id}`,
+      }, () => {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => { void refreshBidSummary(); }, 100);
+      })
+      .subscribe((status) => {
+        if (!active) return;
+        if (status === 'SUBSCRIBED') {
+          subscribed = true;
+          void refreshBidSummary();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          subscribed = false;
+        }
+      });
+    const fallbackRefresh = setInterval(() => {
+      if (!subscribed) void refreshBidSummary();
+    }, 15000);
+
+    return () => {
+      active = false;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      clearInterval(fallbackRefresh);
+      void supabase.removeChannel(channel);
+    };
   }, [listing.id, isAuction, isDutch]);
 
   useEffect(() => {

@@ -14,6 +14,10 @@ export function VouchersPage() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [loyaltyBalance, setLoyaltyBalance] = useState(0);
+  const [loyaltyBusy, setLoyaltyBusy] = useState(false);
+  const [loyaltyMessage, setLoyaltyMessage] = useState<string | null>(null);
+  const [loyaltyError, setLoyaltyError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -42,6 +46,10 @@ export function VouchersPage() {
         .limit(20);
       setRedemptions((redemptionData as VoucherRedemption[]) || []);
 
+      const { data: pointsData, error: pointsError } = await supabase.rpc('get_loyalty_points_balance');
+      if (pointsError) setLoyaltyError(`Could not load reward points: ${pointsError.message}`);
+      else setLoyaltyBalance(Number(pointsData || 0));
+
       setLoading(false);
     }
     if (!authLoading) load();
@@ -51,6 +59,31 @@ export function VouchersPage() {
     navigator.clipboard.writeText(code);
     setCopiedCode(code);
     setTimeout(() => setCopiedCode(null), 2000);
+  }
+
+  async function redeemPoints() {
+    setLoyaltyBusy(true);
+    setLoyaltyError(null);
+    setLoyaltyMessage(null);
+    try {
+      const { data, error } = await supabase.rpc('redeem_loyalty_points', { p_points: 100 });
+      if (error) throw error;
+      const reward = data?.[0];
+      if (!reward?.code) throw new Error('The reward voucher was not created.');
+      setLoyaltyBalance((current) => current - Number(reward.points_spent));
+      setLoyaltyMessage(`Reward code ${reward.code} gives ${formatPrice(Number(reward.discount_value))} off and expires ${new Date(reward.expires_at).toLocaleDateString()}.`);
+      const { data: voucher, error: voucherError } = await supabase
+        .from('vouchers')
+        .select('*')
+        .eq('code', reward.code)
+        .maybeSingle();
+      if (voucherError) throw voucherError;
+      if (voucher) setVouchers((current) => [voucher as Voucher, ...current]);
+    } catch (error) {
+      setLoyaltyError(error instanceof Error ? error.message : 'Could not redeem reward points.');
+    } finally {
+      setLoyaltyBusy(false);
+    }
   }
 
   if (!authLoading && !user) {
@@ -103,6 +136,26 @@ export function VouchersPage() {
           </p>
         </div>
       )}
+
+      <section className="card mb-6 flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="font-serif text-lg font-bold text-ink-900">ThriftSync Rewards</h2>
+          <p className="mt-1 text-sm text-ink-500">
+            Earn 1 point per ₱100 spent on a completed order. Redeem 100 points for a ₱25 voucher (₱50 minimum cart, valid for 90 days).
+          </p>
+          <p className="mt-2 text-sm font-medium text-sage-700">Available balance: {loyaltyBalance} points</p>
+          {loyaltyMessage && <p role="status" className="mt-2 text-xs text-sage-700">{loyaltyMessage}</p>}
+          {loyaltyError && <p role="alert" className="mt-2 text-xs text-terracotta-700">{loyaltyError}</p>}
+        </div>
+        <button
+          type="button"
+          onClick={() => void redeemPoints()}
+          disabled={loyaltyBalance < 100 || loyaltyBusy}
+          className="btn-primary shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {loyaltyBusy ? 'Redeeming…' : 'Redeem 100 points'}
+        </button>
+      </section>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard icon={<Tag className="w-5 h-5" />} label="Active Codes" value={String(activeVouchers.length)} color="sage" />

@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from 'react';
-import { X } from 'lucide-react';
+import { useRef, useState, type FormEvent } from 'react';
+import { Upload, X } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { supabase, type Boutique, type Profile } from '@/lib/supabase';
 import { resizeImage } from '@/lib/utils';
@@ -35,6 +35,76 @@ async function removeUploadedImages(paths: string[]): Promise<string | null> {
   if (paths.length === 0) return null;
   const { error } = await supabase.storage.from('listing-images').remove(paths);
   return error?.message || null;
+}
+
+function ImageDropzone({
+  label,
+  currentUrl,
+  file,
+  onSelect,
+  onRemove,
+}: {
+  label: string;
+  currentUrl: string;
+  file: File | null;
+  onSelect: (file: File | null) => void;
+  onRemove: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+
+  function acceptDroppedFile(files: FileList | null) {
+    onSelect(files?.[0] || null);
+    setDragging(false);
+  }
+
+  return (
+    <div>
+      <div
+        onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
+        onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+        onDragLeave={(event) => {
+          const nextTarget = event.relatedTarget;
+          if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) setDragging(false);
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          acceptDroppedFile(event.dataTransfer.files);
+        }}
+        className={`rounded-xl border-2 border-dashed p-3 text-center transition-colors ${
+          dragging ? 'border-sage-600 bg-sage-50' : 'border-ink-200 bg-white'
+        }`}
+      >
+        {file ? (
+          <p className="truncate text-xs font-medium text-ink-700" aria-live="polite">
+            Selected: {file.name}
+          </p>
+        ) : currentUrl ? (
+          <img src={currentUrl} alt={`Current ${label}`} className="mx-auto mb-2 max-h-20 max-w-full rounded-lg object-contain" />
+        ) : (
+          <Upload className="mx-auto mb-2 h-5 w-5 text-ink-400" aria-hidden="true" />
+        )}
+        <p className="text-xs text-ink-500">Drag and drop an image here, or</p>
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          aria-label={`Choose ${label} image`}
+          onChange={(event) => acceptDroppedFile(event.target.files)}
+          className="sr-only"
+        />
+        <button type="button" onClick={() => inputRef.current?.click()} className="mt-1 text-xs font-semibold text-sage-700 hover:underline">
+          Browse files
+        </button>
+        <p className="mt-1 text-[10px] text-ink-400">JPG, PNG, or WebP · up to 10 MB</p>
+      </div>
+      {(currentUrl || file) && (
+        <button type="button" onClick={onRemove} className="mt-1 text-xs text-terracotta-700 hover:underline">
+          Remove {label.toLowerCase()}
+        </button>
+      )}
+    </div>
+  );
 }
 
 export function SellerProfileEditor({
@@ -207,26 +277,16 @@ export function SellerProfileEditor({
                 placeholder="Tell buyers a little about yourself."
               />
             </label>
-            <label className="block text-xs font-medium text-ink-700">
-              Profile photo
-              {avatarUrl && !avatarFile && (
-                <img src={avatarUrl} alt="Current profile photo" className="mb-2 mt-1 h-16 w-16 rounded-full object-cover" />
-              )}
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                onChange={(event) => setAvatarFile(event.target.files?.[0] || null)}
-                className="input-field mt-1"
+            <div className="block text-xs font-medium text-ink-700">
+              <p className="mb-1">Profile photo</p>
+              <ImageDropzone
+                label="profile photo"
+                currentUrl={avatarUrl}
+                file={avatarFile}
+                onSelect={setAvatarFile}
+                onRemove={() => { setAvatarUrl(''); setAvatarFile(null); }}
               />
-              <span className="mt-1 block font-normal text-ink-400">
-                {avatarFile ? `Selected: ${avatarFile.name}` : 'Choose a JPG, PNG, or WebP file (max 10 MB).'}
-              </span>
-              {(avatarUrl || avatarFile) && (
-                <button type="button" onClick={() => { setAvatarUrl(''); setAvatarFile(null); }} className="mt-1 text-xs text-terracotta-700 hover:underline">
-                  Remove profile photo
-                </button>
-              )}
-            </label>
+            </div>
             <button type="submit" disabled={saving !== null} className="btn-secondary text-sm disabled:opacity-60">
               {saving === 'profile' ? 'Saving…' : 'Save seller profile'}
             </button>
@@ -265,46 +325,26 @@ export function SellerProfileEditor({
               />
             </label>
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="block text-xs font-medium text-ink-700">
-                Shop logo
-                {logoUrl && !logoFile && (
-                  <img src={logoUrl} alt="Current shop logo" className="mb-2 mt-1 h-16 w-16 rounded-lg object-cover" />
-                )}
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  onChange={(event) => setLogoFile(event.target.files?.[0] || null)}
-                  className="input-field mt-1"
+              <div className="block text-xs font-medium text-ink-700">
+                <p className="mb-1">Shop logo</p>
+                <ImageDropzone
+                  label="shop logo"
+                  currentUrl={logoUrl}
+                  file={logoFile}
+                  onSelect={setLogoFile}
+                  onRemove={() => { setLogoUrl(''); setLogoFile(null); }}
                 />
-                <span className="mt-1 block font-normal text-ink-400">
-                  {logoFile ? `Selected: ${logoFile.name}` : 'Choose a JPG, PNG, or WebP file (max 10 MB).'}
-                </span>
-                {(logoUrl || logoFile) && (
-                  <button type="button" onClick={() => { setLogoUrl(''); setLogoFile(null); }} className="mt-1 text-xs text-terracotta-700 hover:underline">
-                    Remove shop logo
-                  </button>
-                )}
-              </label>
-              <label className="block text-xs font-medium text-ink-700">
-                Cover image
-                {bannerUrl && !bannerFile && (
-                  <img src={bannerUrl} alt="Current storefront cover" className="mb-2 mt-1 h-16 w-full rounded-lg object-cover" />
-                )}
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  onChange={(event) => setBannerFile(event.target.files?.[0] || null)}
-                  className="input-field mt-1"
+              </div>
+              <div className="block text-xs font-medium text-ink-700">
+                <p className="mb-1">Cover image</p>
+                <ImageDropzone
+                  label="cover image"
+                  currentUrl={bannerUrl}
+                  file={bannerFile}
+                  onSelect={setBannerFile}
+                  onRemove={() => { setBannerUrl(''); setBannerFile(null); }}
                 />
-                <span className="mt-1 block font-normal text-ink-400">
-                  {bannerFile ? `Selected: ${bannerFile.name}` : 'Choose a JPG, PNG, or WebP file (max 10 MB).'}
-                </span>
-                {(bannerUrl || bannerFile) && (
-                  <button type="button" onClick={() => { setBannerUrl(''); setBannerFile(null); }} className="mt-1 text-xs text-terracotta-700 hover:underline">
-                    Remove cover image
-                  </button>
-                )}
-              </label>
+              </div>
             </div>
             <label className="block text-xs font-medium text-ink-700">
               Shop location

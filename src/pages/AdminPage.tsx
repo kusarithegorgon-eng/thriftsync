@@ -72,7 +72,6 @@ const HISTORY_VALUE_LABELS: Record<string, string> = {
   approved: 'Approved',
   buyer: 'Buyer',
   completed: 'Completed',
-  courier: 'Courier',
   draft: 'Draft',
   in_escrow: 'In escrow',
   pending: 'Pending',
@@ -82,6 +81,7 @@ const HISTORY_VALUE_LABELS: Record<string, string> = {
   rejected: 'Rejected',
   restricted: 'Restricted',
   seller: 'Seller',
+  courier: 'Courier',
   suspended: 'Suspended',
   temporarily_hidden: 'Temporarily hidden',
   moderator: 'Content Moderator',
@@ -217,6 +217,10 @@ export function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<ModerationStatus | 'all'>('pending_review');
   const [searchQuery, setSearchQuery] = useState('');
+  const [sellerSearch, setSellerSearch] = useState('');
+  const [sellerRatingFilter, setSellerRatingFilter] = useState('0');
+  const [listingSellerNames, setListingSellerNames] = useState<Record<string, string>>({});
+  const [listingLoadError, setListingLoadError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<{ id: string; text: string; success: boolean } | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -366,9 +370,75 @@ export function AdminPage() {
   const loadListings = useCallback(async () => {
     setLoading(true);
     setSelectedIds([]);
+    setListingLoadError(null);
+    let matchingBoutiqueIds: string[] | null = null;
+    const sellerNameOrId = isSystemAdmin ? sellerSearch.trim() : '';
+    const minimumSellerRating = isSystemAdmin ? Number(sellerRatingFilter) : 0;
+
+    if (sellerNameOrId) {
+      let sellerQuery = supabase.from('profiles').select('id').eq('role', 'seller');
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sellerNameOrId)) {
+        sellerQuery = sellerQuery.eq('id', sellerNameOrId);
+      } else {
+        sellerQuery = sellerQuery.ilike('display_name', `%${sellerNameOrId}%`);
+      }
+      const { data: sellerData, error: sellerError } = await sellerQuery;
+      if (sellerError) {
+        setListingLoadError(`Could not search sellers: ${sellerError.message}`);
+        setListings([]);
+        setListingSellerNames({});
+        setLoading(false);
+        return;
+      }
+      const sellerIds = (sellerData || []).map((seller) => seller.id);
+      if (sellerIds.length === 0) {
+        setListings([]);
+        setListingSellerNames({});
+        setLoading(false);
+        return;
+      }
+
+      let boutiquesQuery = supabase.from('boutiques').select('id').in('seller_id', sellerIds);
+      if (minimumSellerRating > 0) {
+        boutiquesQuery = boutiquesQuery.gte('seller_rating_avg', minimumSellerRating).gt('seller_rating_count', 0);
+      }
+      const { data: boutiqueData, error: boutiqueError } = await boutiquesQuery;
+      if (boutiqueError) {
+        setListingLoadError(`Could not find the seller's boutiques: ${boutiqueError.message}`);
+        setListings([]);
+        setListingSellerNames({});
+        setLoading(false);
+        return;
+      }
+      matchingBoutiqueIds = (boutiqueData || []).map((boutique) => boutique.id);
+    } else if (minimumSellerRating > 0) {
+      const { data: boutiqueData, error: boutiqueError } = await supabase
+        .from('boutiques')
+        .select('id')
+        .gte('seller_rating_avg', minimumSellerRating)
+        .gt('seller_rating_count', 0);
+      if (boutiqueError) {
+        setListingLoadError(`Could not filter sellers by rating: ${boutiqueError.message}`);
+        setListings([]);
+        setListingSellerNames({});
+        setLoading(false);
+        return;
+      }
+      matchingBoutiqueIds = (boutiqueData || []).map((boutique) => boutique.id);
+    }
+
+    if (matchingBoutiqueIds && matchingBoutiqueIds.length === 0) {
+      setListings([]);
+      setListingSellerNames({});
+      setLoading(false);
+      return;
+    }
+
     let query = supabase
       .from('listings')
-      .select('*, boutiques(id, name, slug, logo_url)');
+      .select('*, boutiques(id, name, slug, logo_url, seller_id, seller_rating_avg, seller_rating_count)');
+
+    if (matchingBoutiqueIds) query = query.in('boutique_id', matchingBoutiqueIds);
 
     if (filter !== 'all') {
       query = query.eq('moderation_status', filter);
@@ -380,11 +450,33 @@ export function AdminPage() {
 
     const { data, error } = await query.order('created_at', { ascending: false }).limit(50);
     if (error) {
-      console.error('Admin load error:', error);
+      setListingLoadError(`Could not load listings: ${error.message}`);
+      setListings([]);
+      setListingSellerNames({});
+      setLoading(false);
+      return;
     }
-    setListings((data as ListingWithBoutique[]) || []);
+    const loadedListings = (data as ListingWithBoutique[]) || [];
+    setListings(loadedListings);
+    setListingSellerNames({});
+    const sellerIds = [...new Set(loadedListings
+      .map((listing) => listing.boutiques?.seller_id)
+      .filter((sellerId): sellerId is string => !!sellerId))];
+    if (isSystemAdmin && sellerIds.length > 0) {
+      const { data: sellerNames, error: sellerNameError } = await supabase
+        .from('profiles')
+        .select('id, display_name')
+        .in('id', sellerIds);
+      if (sellerNameError) {
+        setListingLoadError(`Listings loaded, but seller names could not be loaded: ${sellerNameError.message}`);
+      } else {
+        setListingSellerNames(Object.fromEntries((sellerNames || []).map((seller) => [seller.id, seller.display_name])));
+      }
+    } else {
+      setListingSellerNames({});
+    }
     setLoading(false);
-  }, [filter, searchQuery]);
+  }, [filter, isSystemAdmin, searchQuery, sellerRatingFilter, sellerSearch]);
 
   const loadReports = useCallback(async () => {
     const { data, error } = await supabase
@@ -831,7 +923,6 @@ export function AdminPage() {
       </div>
     );
   }
-
   const pendingCount = listings.filter((l) => l.moderation_status === 'pending_review').length;
   const pendingListings = listings.filter((listing) => listing.moderation_status === 'pending_review');
   const selectedPendingCount = pendingListings.filter((listing) => selectedIds.includes(listing.id)).length;
@@ -885,7 +976,7 @@ export function AdminPage() {
               void loadGeneralReports();
             } else if (activeSection === 'accounts') void loadProfiles();
             else if (activeSection === 'overview') void loadAdminSummary();
-            else void loadAdminHistory();
+            else if (activeSection === 'history') void loadAdminHistory();
           }}
           className="btn-secondary text-sm flex items-center gap-2"
         >
@@ -1122,7 +1213,7 @@ export function AdminPage() {
           <div>
             <h2 className="text-lg font-semibold text-ink-900">Account Roles</h2>
             <p className="mt-1 text-xs text-ink-500">
-              Content moderators can review listings and content reports. Refunds, sanctions, and role changes stay with system administrators.
+              Content moderators can review listings and content reports. Sellers invite, link, and assign their own drivers; administrators cannot create courier accounts or dispatch deliveries.
             </p>
           </div>
           {accountMessage && (
@@ -1197,6 +1288,9 @@ export function AdminPage() {
                       }}
                       className="input-field w-full text-sm sm:w-48"
                     >
+                      {managedProfile.role === 'courier' && (
+                        <option value="courier">Courier (seller-managed)</option>
+                      )}
                       {PROFILE_ROLE_OPTIONS.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
@@ -1222,7 +1316,7 @@ export function AdminPage() {
             </div>
           )}
           <p className="mt-3 text-[10px] text-ink-400">
-            Showing up to 250 accounts. You cannot change your own role.
+            Showing up to 250 accounts. You cannot change your own role or assign a courier role.
           </p>
         </section>
       )}
@@ -1262,6 +1356,40 @@ export function AdminPage() {
           />
         </div>
       </div>
+
+      {isSystemAdmin && (
+        <div className="mb-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem]">
+          <label className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-ink-400" />
+            <input
+              type="search"
+              value={sellerSearch}
+              onChange={(event) => setSellerSearch(event.target.value)}
+              placeholder="Filter by seller name or account ID"
+              aria-label="Filter listings by seller"
+              className="input-field pl-10 text-sm"
+            />
+          </label>
+          <label>
+            <span className="sr-only">Minimum seller rating</span>
+            <select
+              value={sellerRatingFilter}
+              onChange={(event) => setSellerRatingFilter(event.target.value)}
+              className="input-field text-sm"
+            >
+              <option value="0">Any seller rating</option>
+              <option value="3">3.0+ seller rating</option>
+              <option value="4">4.0+ seller rating</option>
+              <option value="4.5">4.5+ seller rating</option>
+            </select>
+          </label>
+        </div>
+      )}
+      {listingLoadError && (
+        <p role="alert" className="mb-4 rounded-lg bg-terracotta-50 p-3 text-xs text-terracotta-700">
+          {listingLoadError}
+        </p>
+      )}
 
       {bulkMessage && (
         <div className={cn(
@@ -1358,6 +1486,16 @@ export function AdminPage() {
                         {' · '}
                         {formatPrice(Number(listing.price))}
                       </p>
+                      {isSystemAdmin && listing.boutiques?.seller_id && (
+                        <p className="mt-1 text-[10px] text-ink-500">
+                          Seller: {listingSellerNames[listing.boutiques.seller_id] || listing.boutiques.seller_id}
+                          {listing.boutiques.seller_rating_count > 0 && (
+                            <span className="ml-1 font-medium text-gold-700">
+                              · ★ {Number(listing.boutiques.seller_rating_avg).toFixed(1)} ({listing.boutiques.seller_rating_count} reviews)
+                            </span>
+                          )}
+                        </p>
+                      )}
                     </div>
                     <ModerationBadge status={listing.moderation_status} />
                   </div>
@@ -1365,6 +1503,15 @@ export function AdminPage() {
                   <p className="text-xs text-ink-500 line-clamp-2 mb-2">
                     {listing.description || 'No description'}
                   </p>
+
+                  {listing.automated_flags?.length > 0 && (
+                    <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+                      <p className="mb-1 font-medium">Automated review signals — moderator decision required</p>
+                      <ul className="list-inside list-disc space-y-0.5">
+                        {listing.automated_flags.map((flag) => <li key={flag}>{flag}</li>)}
+                      </ul>
+                    </div>
+                  )}
 
                   <div className="flex items-center gap-3 text-[10px] text-ink-400 mb-3">
                     <span>{listing.era || 'No era'}</span>
@@ -1912,6 +2059,7 @@ function ModerationBadge({ status }: { status: ModerationStatus }) {
       </span>
     );
   }
+
   if (status === 'rejected') {
     return (
       <span className="badge bg-terracotta-100 text-terracotta-600 shrink-0">

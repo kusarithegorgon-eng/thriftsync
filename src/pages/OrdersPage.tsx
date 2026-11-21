@@ -1,14 +1,33 @@
 import { useEffect, useRef, useState } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import { Package, Truck, CheckCircle, CheckCircle2, Clock, KeyRound, Star, Gavel, MessageCircle } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
-import { supabase, type Order, type Listing, type Boutique, type LockerHandoff, type LockerLocation } from '@/lib/supabase';
+import { DeliveryChatDrawer } from '@/components/DeliveryChatDrawer';
+import { DeliveryProofImage } from '@/components/DeliveryProofImage';
+import {
+  supabase,
+  type Order,
+  type Listing,
+  type Boutique,
+  type LockerHandoff,
+  type LockerLocation,
+  type DeliveryJobEvent,
+} from '@/lib/supabase';
 import { formatPrice, formatTimeAgo, cn } from '@/lib/utils';
 import { cancelPaymongoCheckout, confirmPaymongoCheckout, createAuctionPaymongoCheckout } from '@/lib/paymongo';
 
 type OrderWithDetails = Order & {
   listings: Pick<Listing, 'id' | 'title' | 'images' | 'listing_type'> | null;
   boutiques: Pick<Boutique, 'id' | 'name' | 'slug'> | null;
+};
+type BuyerCourierProgress = {
+  delivery_job_id: string;
+  status: string;
+  tracking_code: string;
+  delivery_proof_path: string | null;
+  delivery_code: string | null;
+  events: Pick<DeliveryJobEvent, 'id' | 'event_type' | 'created_at'>[];
 };
 
 const AUCTION_PAYMENT_SESSION_KEY = 'thriftsync-auction-payment-session';
@@ -19,12 +38,15 @@ export function OrdersPage() {
   const [orders, setOrders] = useState<OrderWithDetails[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [deliveryRealtimeWarning, setDeliveryRealtimeWarning] = useState<string | null>(null);
+  const [deliveryRefresh, setDeliveryRefresh] = useState(0);
   const [deliveryActionId, setDeliveryActionId] = useState<string | null>(null);
   const [deliveryErrors, setDeliveryErrors] = useState<Record<string, string>>({});
   const [lockerPins, setLockerPins] = useState<Record<string, string>>({});
   const [pinGeneratingOrderId, setPinGeneratingOrderId] = useState<string | null>(null);
   const [lockerHandoffs, setLockerHandoffs] = useState<Record<string, LockerHandoff>>({});
   const [lockerLocations, setLockerLocations] = useState<Record<string, LockerLocation>>({});
+  const [courierProgress, setCourierProgress] = useState<Record<string, BuyerCourierProgress>>({});
   const [reviewedOrderIds, setReviewedOrderIds] = useState<string[]>([]);
   const [reviewRatings, setReviewRatings] = useState<Record<string, { accuracy: number; communication: number; punctuality: number }>>({});
   const [reviewBodies, setReviewBodies] = useState<Record<string, string>>({});
@@ -53,6 +75,64 @@ export function OrdersPage() {
       setOrders((data as OrderWithDetails[]) || []);
       const orderIds = (data || []).map((order) => order.id);
       if (orderIds.length > 0) {
+        const courierOrderIds = ((data || []) as OrderWithDetails[])
+          .filter((order) => order.delivery_method === 'courier')
+          .map((order) => order.id);
+        if (courierOrderIds.length > 0) {
+          const { data: jobData, error: jobError } = await supabase
+            .from('delivery_jobs')
+            .select('id, order_id, status, tracking_code, delivery_proof_path')
+            .in('order_id', courierOrderIds);
+          if (jobError) {
+            setLoadError(`Could not load courier tracking: ${jobError.message}`);
+          } else {
+            const jobs = (jobData || []) as {
+              id: string; order_id: string; status: string; tracking_code: string; delivery_proof_path: string | null;
+            }[];
+            const { data: eventData, error: eventError } = jobs.length > 0
+              ? await supabase
+                .from('delivery_job_events')
+                .select('id, delivery_job_id, event_type, created_at')
+                .in('delivery_job_id', jobs.map((job) => job.id))
+                .order('created_at', { ascending: true })
+              : { data: [], error: null };
+            if (eventError) {
+              setLoadError(`Could not load courier delivery history: ${eventError.message}`);
+            }
+            const eventsByJob = new Map<string, BuyerCourierProgress['events']>();
+            (eventData || []).forEach((event) => {
+              const events = eventsByJob.get(event.delivery_job_id) || [];
+              events.push(event as BuyerCourierProgress['events'][number]);
+              eventsByJob.set(event.delivery_job_id, events);
+            });
+            const codeResults = await Promise.all(jobs.map(async (job) => {
+              const order = ((data || []) as OrderWithDetails[]).find((item) => item.id === job.order_id);
+              if (order?.status !== 'shipped') return { orderId: job.order_id, deliveryCode: null, error: null };
+              const result = await supabase.rpc('get_buyer_delivery_code', { p_order_id: job.order_id });
+              return {
+                orderId: job.order_id,
+                deliveryCode: (result.data as { delivery_code: string }[] | null)?.[0]?.delivery_code || null,
+                error: result.error,
+              };
+            }));
+            const codeError = codeResults.find((result) => result.error)?.error;
+            if (codeError) setLoadError(`Could not load your courier delivery code: ${codeError.message}`);
+            const progress: Record<string, BuyerCourierProgress> = {};
+            jobs.forEach((job) => {
+              progress[job.order_id] = {
+                delivery_job_id: job.id,
+                status: job.status,
+                tracking_code: job.tracking_code,
+                delivery_proof_path: job.delivery_proof_path,
+                delivery_code: codeResults.find((result) => result.orderId === job.order_id)?.deliveryCode || null,
+                events: eventsByJob.get(job.id) || [],
+              };
+            });
+            setCourierProgress(progress);
+          }
+        } else {
+          setCourierProgress({});
+        }
         const { data: reviews, error: reviewsError } = await supabase
           .from('seller_reviews')
           .select('order_id')
@@ -92,7 +172,28 @@ export function OrdersPage() {
       setLoading(false);
     }
     if (!authLoading) load();
-  }, [user, authLoading]);
+  }, [user, authLoading, deliveryRefresh]);
+
+  useEffect(() => {
+    if (!user || authLoading) return undefined;
+
+    const channel = supabase
+      .channel(`buyer-delivery-progress-${user.id}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'delivery_jobs',
+      }, () => { setDeliveryRefresh((current) => current + 1); })
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          setDeliveryRealtimeWarning('Live delivery updates are unavailable. Refresh My Orders to check for changes.');
+        } else if (status === 'SUBSCRIBED') {
+          setDeliveryRealtimeWarning(null);
+        }
+      });
+
+    return () => { void supabase.removeChannel(channel); };
+  }, [authLoading, user]);
 
   useEffect(() => {
     if (!user || auctionPaymentReturnHandled.current) return;
@@ -317,6 +418,11 @@ export function OrdersPage() {
           {loadError}
         </p>
       )}
+      {deliveryRealtimeWarning && (
+        <p role="status" className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          {deliveryRealtimeWarning}
+        </p>
+      )}
 
       {loading ? (
         <div className="space-y-3">
@@ -426,8 +532,48 @@ export function OrdersPage() {
                   )}
                   {order.payment_method === 'cash_on_delivery' && (
                     <p className="mt-2 text-xs font-medium text-ink-600">
-                      Pay {formatPrice(Number(order.amount))} directly to the seller or courier when you receive the item. No online payment was collected.
+                      Pay {formatPrice(Number(order.amount))} directly to {order.delivery_method === 'courier' ? 'the assigned courier' : 'the seller or courier'} when you receive the item. No online payment was collected.
                     </p>
+                  )}
+                  {order.delivery_method === 'courier' && (
+                    <div className="mt-3 rounded-lg border border-sky-200 bg-sky-50 p-3">
+                      <p className="text-xs font-semibold text-sky-900">
+                        Courier delivery: {courierProgress[order.id]?.status?.replace(/_/g, ' ') || 'waiting for courier assignment'}
+                      </p>
+                      {courierProgress[order.id]?.tracking_code && (
+                        <p className="mt-1 font-mono text-xs text-sky-800">
+                          Tracking: {courierProgress[order.id].tracking_code}
+                        </p>
+                      )}
+                      {courierProgress[order.id]?.delivery_code && (
+                        <p className="mt-2 text-xs text-sky-900">
+                          When your parcel arrives, share this code with the courier to confirm handoff:
+                          <span className="ml-1 font-mono font-bold tracking-wider">{courierProgress[order.id].delivery_code}</span>
+                        </p>
+                      )}
+                      {order.status === 'shipped' && !courierProgress[order.id]?.delivery_code && (
+                        <p className="mt-1 text-xs text-sky-800">The courier has your parcel. Your delivery code will appear here when the delivery is underway.</p>
+                      )}
+                      {courierProgress[order.id]?.events.length > 0 && (
+                        <ol className="mt-3 space-y-1 border-t border-sky-200 pt-2">
+                          {courierProgress[order.id].events.map((event) => (
+                            <li key={event.id} className="text-[11px] text-sky-900">
+                              <span className="font-medium">{event.event_type.replace(/_/g, ' ')}</span>
+                              <span className="ml-2 text-sky-700">{new Date(event.created_at).toLocaleString()}</span>
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                      {courierProgress[order.id]?.delivery_proof_path && (
+                        <DeliveryProofImage path={courierProgress[order.id].delivery_proof_path!} />
+                      )}
+                      {courierProgress[order.id]?.delivery_job_id && (
+                        <DeliveryChatDrawer
+                          deliveryJobId={courierProgress[order.id].delivery_job_id}
+                          status={courierProgress[order.id].status}
+                        />
+                      )}
+                    </div>
                   )}
                   {order.delivery_method === 'locker' && (
                     <div className="mt-3 rounded-lg bg-ink-50 p-3">
@@ -444,6 +590,23 @@ export function OrdersPage() {
                           Give this PIN to the seller for drop-off, then use it to confirm pickup:
                           <span className="ml-1 font-mono font-bold tracking-wider text-ink-900">{handoff.pin_code}</span>
                         </p>
+                      )}
+                      {handoff?.status === 'PENDING' && !handoffWindowExpired && (
+                        <div className="mt-3 flex items-center gap-3">
+                          <QRCodeSVG
+                            value={JSON.stringify({
+                              type: 'thrift-locker-dropoff',
+                              orderId: order.id,
+                              pin: handoff.pin_code,
+                            })}
+                            size={112}
+                            level="M"
+                            title="Locker drop-off QR code"
+                          />
+                          <p className="max-w-xs text-xs text-ink-500">
+                            Show this code to the seller to record the locker drop-off. Keep it private; it can authorize the seller’s drop-off step.
+                          </p>
+                        </div>
                       )}
                       {handoff?.drop_off_window_end && ['PENDING', 'DROPPED_OFF'].includes(handoff.status) && !handoffWindowExpired && (
                         <p className="mt-1 text-[10px] text-ink-400">
@@ -489,7 +652,7 @@ export function OrdersPage() {
                 <div className="flex-1 h-px bg-ink-200" />
                 <StatusStep icon={<Clock className="w-3.5 h-3.5" />} label="Escrow" active={['escrow_held', 'shipped', 'delivered', 'completed'].includes(order.status)} />
                 <div className="flex-1 h-px bg-ink-200" />
-                <StatusStep icon={<Truck className="w-3.5 h-3.5" />} label={order.delivery_method === 'locker' ? 'At locker' : 'Shipped'} active={['shipped', 'delivered', 'completed'].includes(order.status)} />
+                <StatusStep icon={<Truck className="w-3.5 h-3.5" />} label={order.delivery_method === 'locker' ? 'At locker' : order.delivery_method === 'courier' ? 'Courier' : 'Shipped'} active={['shipped', 'delivered', 'completed'].includes(order.status)} />
                 <div className="flex-1 h-px bg-ink-200" />
                 <StatusStep icon={<CheckCircle className="w-3.5 h-3.5" />} label={order.delivery_method === 'locker' ? 'Picked up' : 'Delivered'} active={['delivered', 'completed'].includes(order.status)} />
               </div>
@@ -527,7 +690,7 @@ export function OrdersPage() {
                   </div>
                 </form>
               )}
-              {order.status === 'shipped' && order.delivery_method !== 'locker' && (
+              {order.status === 'shipped' && order.delivery_method !== 'locker' && order.delivery_method !== 'courier' && (
                 <div className="mt-3 flex flex-col items-end gap-2">
                   {deliveryErrors[order.id] && (
                     <p role="alert" className="text-xs text-terracotta-600">{deliveryErrors[order.id]}</p>

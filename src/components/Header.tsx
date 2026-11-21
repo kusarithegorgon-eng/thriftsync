@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Gavel, Search, Heart, ShoppingBag, Menu, X, Store, User, LayoutDashboard, Package, Tag, MapPin, Lock, ShieldCheck, MessageCircle, Bell, ArrowLeftRight } from 'lucide-react';
+import { Gavel, Search, Heart, ShoppingBag, Menu, X, Store, User, LayoutDashboard, Package, Tag, MapPin, Lock, ShieldCheck, MessageCircle, Bell, ArrowLeftRight, Truck } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { useCart } from '@/lib/cart';
@@ -104,6 +104,7 @@ export function Header() {
   const unreadNotificationCount = notifications.filter((notification) => !notification.read_at).length;
   const canAccessModeration = profile?.role === 'admin' || profile?.role === 'moderator';
   const moderationLinkLabel = profile?.role === 'admin' ? 'Admin' : 'Moderation';
+  const isCourier = profile?.role === 'courier';
 
   return (
     <>
@@ -159,6 +160,11 @@ export function Header() {
               <NavLink active={isActive('dashboard')} onClick={() => navigate({ name: 'dashboard' })}>
                 Dashboard
               </NavLink>
+              {isCourier && (
+                <NavLink active={isActive('courier-deliveries')} onClick={() => navigate({ name: 'courier-deliveries' })}>
+                  Deliveries
+                </NavLink>
+              )}
               {canAccessModeration && (
                 <NavLink active={isActive('admin')} onClick={() => navigate({ name: 'admin' })}>
                   {moderationLinkLabel}
@@ -277,6 +283,11 @@ export function Header() {
                       <MenuItem icon={<LayoutDashboard className="w-4 h-4" />} onClick={() => navigate({ name: 'dashboard' })}>
                         Seller Dashboard
                       </MenuItem>
+                      {isCourier && (
+                        <MenuItem icon={<Truck className="w-4 h-4" />} onClick={() => navigate({ name: 'courier-deliveries' })}>
+                          Courier Deliveries
+                        </MenuItem>
+                      )}
                       <MenuItem icon={<MapPin className="w-4 h-4" />} onClick={() => navigate({ name: 'thrift-crawl' })}>
                         Thrift Crawl Planner
                       </MenuItem>
@@ -363,6 +374,11 @@ export function Header() {
               <MobileNavLink onClick={() => navigate({ name: 'dashboard' })} icon={<LayoutDashboard className="w-4 h-4" />}>
                 Dashboard
               </MobileNavLink>
+              {isCourier && (
+                <MobileNavLink onClick={() => navigate({ name: 'courier-deliveries' })} icon={<Truck className="w-4 h-4" />}>
+                  Courier Deliveries
+                </MobileNavLink>
+              )}
               <MobileNavLink onClick={() => navigate({ name: 'orders' })} icon={<Package className="w-4 h-4" />}>
                 My Orders
               </MobileNavLink>

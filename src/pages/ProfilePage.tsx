@@ -5,7 +5,7 @@ import { supabase, type Boutique, type Profile } from '@/lib/supabase';
 
 export function ProfilePage({ profileId }: { profileId: string }) {
   const { navigate } = useRouter();
-  const [member, setMember] = useState<Pick<Profile, 'id' | 'display_name' | 'avatar_url' | 'bio' | 'created_at'> | null>(null);
+  const [member, setMember] = useState<Pick<Profile, 'id' | 'display_name' | 'avatar_url' | 'bio' | 'created_at' | 'buyer_rating_avg' | 'buyer_rating_count'> | null>(null);
   const [boutique, setBoutique] = useState<Pick<Boutique, 'slug' | 'name' | 'seller_rating_avg' | 'seller_rating_count'> | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -14,7 +14,7 @@ export function ProfilePage({ profileId }: { profileId: string }) {
     async function load() {
       const { data, error: profileError } = await supabase
         .from('profiles')
-        .select('id, display_name, avatar_url, bio, created_at')
+        .select('id, display_name, avatar_url, bio, created_at, buyer_rating_avg, buyer_rating_count')
         .eq('id', profileId)
         .maybeSingle();
       if (!active) return;
@@ -68,6 +68,12 @@ export function ProfilePage({ profileId }: { profileId: string }) {
             <div>
               <h1 className="font-serif text-2xl font-bold text-ink-900">{member.display_name || 'ThriftSync member'}</h1>
               <p className="text-xs text-ink-500">Member since {new Date(member.created_at).toLocaleDateString()}</p>
+              {member.buyer_rating_count > 0 && (
+                <p className="mt-1 flex items-center gap-1 text-xs text-ink-600">
+                  <Star className="h-3.5 w-3.5 fill-gold-500 text-gold-500" />
+                  Buyer rating {Number(member.buyer_rating_avg).toFixed(1)} ({member.buyer_rating_count} verified)
+                </p>
+              )}
             </div>
           </div>
           {member.bio && <p className="mt-5 text-sm leading-relaxed text-ink-600">{member.bio}</p>}

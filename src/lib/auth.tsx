@@ -2,12 +2,12 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import { supabase, type Profile } from './supabase';
 
 type AuthContextValue = {
-  user: { id: string; email: string } | null;
+  user: { id: string; email: string; courierSetupRequired: boolean } | null;
   profile: Profile | null;
   restrictionReason: string | null;
   loading: boolean;
   passwordRecovery: boolean;
-  signUp: (email: string, password: string, displayName: string, role: 'buyer' | 'seller') => Promise<{ error: string | null; verificationRequired: boolean }>;
+  signUp: (email: string, password: string, displayName: string) => Promise<{ error: string | null; verificationRequired: boolean }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   requestPasswordReset: (email: string) => Promise<{ error: string | null }>;
   updatePassword: (password: string) => Promise<{ error: string | null }>;
@@ -21,7 +21,7 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<{ id: string; email: string } | null>(null);
+  const [user, setUser] = useState<{ id: string; email: string; courierSetupRequired: boolean } | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [restrictionReason, setRestrictionReason] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,7 +64,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!mounted) return;
       if (session?.user) {
-        setUser({ id: session.user.id, email: session.user.email || '' });
+        setUser({
+          id: session.user.id,
+          email: session.user.email || '',
+          courierSetupRequired: session.user.user_metadata?.courier_setup_required === true,
+        });
         fetchProfile(session.user.id);
       }
       setLoading(false);
@@ -74,7 +78,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       (async () => {
         if (event === 'PASSWORD_RECOVERY') setPasswordRecovery(true);
         if (session?.user) {
-          setUser({ id: session.user.id, email: session.user.email || '' });
+          setUser({
+            id: session.user.id,
+            email: session.user.email || '',
+            courierSetupRequired: session.user.user_metadata?.courier_setup_required === true,
+          });
           await fetchProfile(session.user.id);
         } else {
           setUser(null);
@@ -96,13 +104,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  async function signUp(email: string, password: string, displayName: string, role: 'buyer' | 'seller') {
+  useEffect(() => {
+    if (user?.courierSetupRequired && window.location.hash !== '#/auth') {
+      window.location.hash = '/auth';
+    }
+  }, [user?.courierSetupRequired]);
+
+  async function signUp(email: string, password: string, displayName: string) {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
         emailRedirectTo: window.location.origin,
-        data: { display_name: displayName, role },
+        data: { display_name: displayName },
       },
     });
 
@@ -133,7 +147,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) return { error: error.message };
     if (data.user) {
-      setUser({ id: data.user.id, email: data.user.email || '' });
+      setUser({
+        id: data.user.id,
+        email: data.user.email || '',
+        courierSetupRequired: data.user.user_metadata?.courier_setup_required === true,
+      });
       await fetchProfile(data.user.id);
     }
     return { error: null };
@@ -147,7 +165,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function updatePassword(password: string) {
-    const { error } = await supabase.auth.updateUser({ password });
+    const update = user?.courierSetupRequired
+      ? { password, data: { courier_setup_required: false } }
+      : { password };
+    const { data, error } = await supabase.auth.updateUser(update);
+    if (!error && data.user) {
+      setUser({
+        id: data.user.id,
+        email: data.user.email || '',
+        courierSetupRequired: data.user.user_metadata?.courier_setup_required === true,
+      });
+    }
     return { error: error?.message || null };
   }
 

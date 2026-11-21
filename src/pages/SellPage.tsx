@@ -1,7 +1,7 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
-import { Upload, X, Camera, AlertTriangle, Check, Loader2, MapPin, RefreshCw } from 'lucide-react';
-import { supabase, type Boutique, type ImageMetadata, type ImageAngle } from '@/lib/supabase';
-import { resizeImage, CEBU_BARANGAYS, isWithinCebu, findNearestBarangay, cn } from '@/lib/utils';
+import { useEffect, useState } from 'react';
+import { Upload, X, Camera, AlertTriangle, Check, Loader2, MapPin } from 'lucide-react';
+import { supabase, type Boutique, type ImageMetadata, type ImageAngle, type Listing } from '@/lib/supabase';
+import { resizeImage, CEBU_BARANGAYS, isWithinCebu, cn } from '@/lib/utils';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 
@@ -119,12 +119,16 @@ function OperatingHoursRow({
   );
 }
 
-export function SellPage() {
+export function SellPage({ listingId }: { listingId?: string }) {
   const { navigate } = useRouter();
-  const { user, profile } = useAuth();
+  const { user } = useAuth();
   const [step, setStep] = useState<'intro' | 'boutique' | 'listing'>('intro');
   const [store, setStore] = useState<Pick<Boutique, 'id' | 'name'> | null>(null);
   const [storeLoading, setStoreLoading] = useState(true);
+  const [editingListing, setEditingListing] = useState<Listing | null>(null);
+  const [loadedListingId, setLoadedListingId] = useState<string | null>(null);
+  const [originalImageUrls, setOriginalImageUrls] = useState<string[]>([]);
+  const [canEditImageMetadata, setCanEditImageMetadata] = useState(false);
   const [boutiqueName, setBoutiqueName] = useState('');
   const [boutiqueTagline, setBoutiqueTagline] = useState('');
   const [boutiqueBio, setBoutiqueBio] = useState('');
@@ -163,9 +167,6 @@ export function SellPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [pendingAngle, setPendingAngle] = useState<ImageAngle>('front');
-
   useEffect(() => {
     let cancelled = false;
 
@@ -202,6 +203,70 @@ export function SellPage() {
     };
   }, [user]);
 
+  useEffect(() => {
+    if (!listingId) {
+      setEditingListing(null);
+      setLoadedListingId(null);
+      setOriginalImageUrls([]);
+      setCanEditImageMetadata(false);
+      return;
+    }
+    if (!user || !store) return;
+    const boutiqueId = store.id;
+    const currentListingId = listingId;
+
+    let cancelled = false;
+    async function loadListingForEdit() {
+      setError(null);
+      const { data, error: listingError } = await supabase
+        .from('listings')
+        .select('*')
+        .eq('id', currentListingId)
+        .eq('boutique_id', boutiqueId)
+        .maybeSingle();
+      if (cancelled) return;
+      if (listingError) {
+        setError(`Could not load this product for editing: ${listingError.message}`);
+      } else if (!data) {
+        setError('This product was not found in your boutique.');
+      } else {
+        const listing = data as Listing;
+        const metadata = listing.image_metadata || [];
+        const hasCompleteImageMetadata = metadata.length > 0
+          && (listing.images || []).every((url) => metadata.some((image) => image.url === url));
+        setEditingListing(listing);
+        setListingTitle(listing.title);
+        setListingDesc(listing.description || '');
+        setListingPrice(String(listing.price));
+        setListingEra(listing.era || '');
+        setListingCategory(listing.category || '');
+        setListingCondition(listing.condition_grade || '');
+        setListingMaterial(listing.material || '');
+        setListingType(listing.listing_type);
+        setBarterEnabled(listing.barter_enabled);
+        setAuctionMode(listing.auction_mode);
+        setAuctionDays(String(listing.auction_duration_days || 7));
+        setIncrementStep(listing.increment_step == null ? '' : String(listing.increment_step));
+        setDutchStartPrice(listing.auction_start_price == null ? '' : String(listing.auction_start_price));
+        setDutchFloorPrice(listing.dutch_floor_price == null ? '' : String(listing.dutch_floor_price));
+        setDecrementRate(listing.decrement_rate == null ? '5' : String(listing.decrement_rate));
+        setDecrementInterval(String(listing.decrement_interval_minutes || 60));
+        setOriginalImageUrls(listing.images || []);
+        setCanEditImageMetadata(hasCompleteImageMetadata);
+        setImages(hasCompleteImageMetadata ? metadata.map((image) => ({
+          url: image.url,
+          angle: image.angle,
+          is_flaw: image.is_flaw,
+          caption: image.caption || '',
+        })) : []);
+        setStep('listing');
+      }
+      setLoadedListingId(currentListingId);
+    }
+    void loadListingForEdit();
+    return () => { cancelled = true; };
+  }, [listingId, store, user]);
+
   if (!user) {
     return (
       <div className="max-w-3xl mx-auto px-4 py-20 text-center animate-fade-in">
@@ -211,6 +276,19 @@ export function SellPage() {
         <h1 className="font-serif text-2xl font-bold text-ink-900 mb-2">Open your boutique</h1>
         <p className="text-sm text-ink-500 mb-6">Sign in to start selling vintage and one-of-a-kind goods on ThriftSync.</p>
         <button onClick={() => navigate({ name: 'auth' })} className="btn-primary">Sign In to Start Selling</button>
+      </div>
+    );
+  }
+
+  if (storeLoading || (listingId && store && loadedListingId !== listingId)) {
+    return <div className="mx-auto max-w-3xl px-4 py-16 text-center text-sm text-ink-500">Loading product details…</div>;
+  }
+
+  if (listingId && (!store || !editingListing)) {
+    return (
+      <div className="mx-auto max-w-2xl px-4 py-16 text-center">
+        <p role="alert" className="mb-4 text-sm text-terracotta-700">{error || 'This product cannot be edited from this account.'}</p>
+        <button type="button" onClick={() => navigate({ name: 'dashboard' })} className="btn-secondary">Back to dashboard</button>
       </div>
     );
   }
@@ -260,8 +338,8 @@ export function SellPage() {
         const filtered = prev.filter((img) => img.angle !== angle);
         return [...filtered, { url: publicUrl, angle, is_flaw: isFlaw, caption: '' }];
       });
-    } catch (err: any) {
-      setUploadError(err.message || 'Failed to upload image');
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Failed to upload image');
     } finally {
       setUploading(false);
     }
@@ -277,6 +355,7 @@ export function SellPage() {
 
   const requiredAngles = ANGLE_OPTIONS.filter((a) => a.required);
   const hasAllRequired = requiredAngles.every((req) => images.some((img) => img.angle === req.value));
+  const isEditingListing = Boolean(listingId && editingListing);
 
   async function handleCreateBoutique(e: React.FormEvent) {
     e.preventDefault();
@@ -354,8 +433,13 @@ export function SellPage() {
     setSubmitting(true);
     setError(null);
 
-    if (!hasAllRequired) {
+    if (!isEditingListing && !hasAllRequired) {
       setError('Please upload all required photos: Front, Back, and Flaw/Damage.');
+      setSubmitting(false);
+      return;
+    }
+    if (isEditingListing && canEditImageMetadata && images.length === 0) {
+      setError('Keep at least one product photo.');
       setSubmitting(false);
       return;
     }
@@ -366,13 +450,17 @@ export function SellPage() {
       return;
     }
 
-    const imageUrls = images.map((img) => img.url);
-    const imageMeta: ImageMetadata[] = images.map((img) => ({
-      url: img.url,
-      angle: img.angle,
-      is_flaw: img.is_flaw,
-      caption: img.caption || undefined,
-    }));
+    const imageUrls = isEditingListing && !canEditImageMetadata
+      ? originalImageUrls
+      : images.map((img) => img.url);
+    const imageMeta: ImageMetadata[] | null = isEditingListing && !canEditImageMetadata
+      ? editingListing?.image_metadata || null
+      : images.map((img) => ({
+        url: img.url,
+        angle: img.angle,
+        is_flaw: img.is_flaw,
+        caption: img.caption || undefined,
+      }));
 
     const isAuction = listingType === 'auction';
     const isDutch = isAuction && auctionMode === 'DUTCH';
@@ -410,37 +498,58 @@ export function SellPage() {
       return;
     }
 
-    const { error: listingError } = await supabase
-      .from('listings')
-      .insert({
-        boutique_id: store.id,
-        title: listingTitle,
-        description: listingDesc,
-        price: startingPrice,
-        era: listingEra || null,
-        category: listingCategory || null,
-        condition_grade: listingCondition || null,
-        material: listingMaterial || null,
-        images: imageUrls,
-        image_metadata: imageMeta,
-        listing_type: listingType,
-        barter_enabled: listingType === 'fixed' && barterEnabled,
-        auction_mode: isAuction ? auctionMode : 'ENGLISH',
-        auction_duration_days: isAuction ? durationDays : null,
-        auction_end_at: isAuction ? new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString() : null,
-        auction_start_price: isDutch ? parseFloat(dutchStartPrice) : null,
-        reserve_price: isAuction && !isDutch ? parseFloat(listingPrice) : null,
-        increment_step: isAuction && !isDutch && incrementStep ? parseFloat(incrementStep) : null,
-        decrement_rate: isDutch ? parseFloat(decrementRate) : null,
-        decrement_interval_minutes: isDutch ? parseInt(decrementInterval) : 60,
-        current_dutch_price: isDutch ? parseFloat(dutchStartPrice) : null,
-        dutch_floor_price: isDutch ? parseFloat(dutchFloorPrice) : null,
-        status: 'draft',
-        moderation_status: 'pending_review',
-        sku: 'TS-' + Date.now().toString(36).slice(-6).toUpperCase(),
-        coa_verified: false,
-        views: 0,
-      });
+    const listingValues = {
+      title: listingTitle,
+      description: listingDesc,
+      price: startingPrice,
+      era: listingEra || null,
+      category: listingCategory || null,
+      condition_grade: listingCondition || null,
+      material: listingMaterial || null,
+      images: imageUrls,
+      image_metadata: imageMeta,
+      listing_type: listingType,
+      barter_enabled: listingType === 'fixed' && barterEnabled,
+      auction_mode: isAuction ? auctionMode : 'ENGLISH',
+      auction_duration_days: isAuction ? durationDays : null,
+      auction_end_at: isAuction
+        ? isEditingListing && editingListing?.auction_duration_days === durationDays && editingListing.auction_end_at
+          ? editingListing.auction_end_at
+          : new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString()
+        : null,
+      auction_start_price: isDutch ? parseFloat(dutchStartPrice) : null,
+      reserve_price: isAuction && !isDutch ? parseFloat(listingPrice) : null,
+      increment_step: isAuction && !isDutch && incrementStep ? parseFloat(incrementStep) : null,
+      decrement_rate: isDutch ? parseFloat(decrementRate) : null,
+      decrement_interval_minutes: isDutch ? parseInt(decrementInterval) : 60,
+      current_dutch_price: isDutch ? parseFloat(dutchStartPrice) : null,
+      dutch_floor_price: isDutch ? parseFloat(dutchFloorPrice) : null,
+    };
+
+    let listingError: { message: string } | null;
+    if (isEditingListing && editingListing) {
+      const { data, error: updateError } = await supabase
+        .from('listings')
+        .update(listingValues)
+        .eq('id', editingListing.id)
+        .eq('boutique_id', store.id)
+        .select('id')
+        .maybeSingle();
+      listingError = updateError || (!data ? { message: 'This listing could not be updated. Refresh and try again.' } : null);
+    } else {
+      const { error: insertError } = await supabase
+        .from('listings')
+        .insert({
+          ...listingValues,
+          boutique_id: store.id,
+          status: 'draft',
+          moderation_status: 'pending_review',
+          sku: 'TS-' + Date.now().toString(36).slice(-6).toUpperCase(),
+          coa_verified: false,
+          views: 0,
+        });
+      listingError = insertError;
+    }
 
     if (listingError) {
       setError(listingError.message);
@@ -458,11 +567,17 @@ export function SellPage() {
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-sage-100 mb-4">
           <Check className="w-8 h-8 text-sage-600" />
         </div>
-        <h1 className="font-serif text-2xl font-bold text-ink-900 mb-2">Product Submitted for Review!</h1>
-        <p className="text-sm text-ink-500 mb-6">Your item has been submitted for admin review. Once approved, it will be live on ThriftSync and visible to buyers in Cebu. This usually takes less than 24 hours.</p>
+        <h1 className="font-serif text-2xl font-bold text-ink-900 mb-2">
+          {isEditingListing ? 'Product Changes Submitted for Review' : 'Product Submitted for Review!'}
+        </h1>
+        <p className="text-sm text-ink-500 mb-6">
+          {isEditingListing
+            ? 'Your changes were saved. The product is hidden from buyers until an administrator reviews the updated listing.'
+            : 'Your item has been submitted for admin review. Once approved, it will be live on ThriftSync and visible to buyers in Cebu. This usually takes less than 24 hours.'}
+        </p>
         <div className="flex gap-3 justify-center">
           <button onClick={() => navigate({ name: 'dashboard' })} className="btn-primary">Go to Dashboard</button>
-          <button
+          {!isEditingListing && <button
             onClick={() => {
               setSuccess(false);
               setListingTitle('');
@@ -487,7 +602,7 @@ export function SellPage() {
             className="btn-secondary"
           >
             Add Another Product
-          </button>
+          </button>}
         </div>
       </div>
     );
@@ -518,7 +633,7 @@ export function SellPage() {
               </div>
             </div>
             <button onClick={() => setStep('boutique')} className="w-full btn-primary py-3">
-              {profile?.role === 'seller' ? 'List a New Item' : 'Get Started'}
+              {store ? 'List a New Item' : 'Get Started'}
             </button>
           </div>
         </>
@@ -642,10 +757,13 @@ export function SellPage() {
             </section>
           )}
           <div className="mb-5">
-            <h2 className="font-serif text-xl font-bold text-ink-900 mb-1">Add a Product</h2>
+            <h2 className="font-serif text-xl font-bold text-ink-900 mb-1">
+              {isEditingListing ? 'Edit Product Listing' : 'Add a Product'}
+            </h2>
             <p className="text-sm text-ink-500">
-              {store ? `Adding a product to ${store.name}.` : 'Upload a product for your new storefront.'}
-              {' '}Each product gets its own listing in your store.
+              {isEditingListing
+                ? `Update the details for ${editingListing?.title || 'this product'}. Saving changes sends it back for administrator review.`
+                : `${store ? `Adding a product to ${store.name}.` : 'Upload a product for your new storefront.'} Each product gets its own listing in your store.`}
             </p>
           </div>
 
@@ -659,7 +777,17 @@ export function SellPage() {
               <textarea value={listingDesc} onChange={(e) => setListingDesc(e.target.value)} className="input-field min-h-[100px] resize-none" placeholder="Describe the item, its condition, provenance, and any notable details..." required />
             </div>
 
-            {/* Image Upload Section */}
+            {isEditingListing && !canEditImageMetadata ? (
+              <div className="rounded-xl border border-ink-200 p-4">
+                <p className="text-xs font-medium text-ink-700">Existing product photos are preserved</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {originalImageUrls.map((url) => (
+                    <img key={url} src={url} alt="Product" className="h-20 w-16 rounded-lg object-cover" />
+                  ))}
+                </div>
+                <p className="mt-2 text-[10px] text-ink-400">This older listing has no editable photo-angle metadata. Its photos will remain unchanged.</p>
+              </div>
+            ) : (
             <div className="border border-ink-200 rounded-xl p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-medium text-ink-700 flex items-center gap-1.5">
@@ -737,6 +865,7 @@ export function SellPage() {
                 Images are auto-resized to max 1200x1600px and uploaded to your store. Required: Front, Back, Flaw/Damage. Flaw photos document condition for vintage grading.
               </p>
             </div>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -853,9 +982,16 @@ export function SellPage() {
 
             {error && <p className="text-sm text-terracotta-600">{error}</p>}
 
-            <button type="submit" disabled={submitting} className="w-full btn-primary py-3">
-              {submitting ? 'Publishing...' : 'Publish Listing'}
-            </button>
+            <div className="flex gap-3">
+              {isEditingListing && (
+                <button type="button" onClick={() => navigate({ name: 'dashboard' })} className="btn-secondary flex-1 py-3">
+                  Cancel
+                </button>
+              )}
+              <button type="submit" disabled={submitting || uploading} className="btn-primary flex-1 py-3">
+                {submitting ? (isEditingListing ? 'Saving…' : 'Publishing...') : isEditingListing ? 'Save Changes' : 'Publish Listing'}
+              </button>
+            </div>
           </form>
         </div>
       )}

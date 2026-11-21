@@ -17,12 +17,16 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
   const [boutique, setBoutique] = useState<Boutique | null>(null);
   const [bids, setBids] = useState<PublicBid[]>([]);
   const [relatedListings, setRelatedListings] = useState<ListingWithBoutique[]>([]);
+  const [personalizedRecommendations, setPersonalizedRecommendations] = useState(false);
+  const [recommendationError, setRecommendationError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedImage, setSelectedImage] = useState(0);
   const [bidAmount, setBidAmount] = useState('');
   const [bidError, setBidError] = useState<string | null>(null);
   const [bidSuccess, setBidSuccess] = useState(false);
   const [bidding, setBidding] = useState(false);
+  const [bidLiveStatus, setBidLiveStatus] = useState<'connecting' | 'live' | 'offline'>('connecting');
+  const [bidFeedError, setBidFeedError] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState('');
   const [showReportModal, setShowReportModal] = useState(false);
   const [reportCategory, setReportCategory] = useState<ReportCategory>('stolen_goods');
@@ -32,8 +36,24 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
   const [claiming, setClaiming] = useState(false);
   const [claimError, setClaimError] = useState<string | null>(null);
 
+  const loadAuctionBids = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('public_auction_bids')
+      .select('*')
+      .eq('listing_id', listingId)
+      .order('amount', { ascending: false })
+      .order('created_at', { ascending: true });
+    if (error) {
+      setBidFeedError(`Could not refresh bids: ${error.message}`);
+      return;
+    }
+    setBidFeedError(null);
+    setBids((data as PublicBid[]) || []);
+  }, [listingId]);
+
   const loadListing = useCallback(async () => {
     setLoading(true);
+    setRecommendationError(null);
     const { data: listingData } = await supabase
       .from('listings')
       .select('*')
@@ -59,28 +79,114 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
       .maybeSingle();
     setBoutique(boutiqueData as Boutique);
 
-    const { data: bidsData } = await supabase
-      .from('public_auction_bids')
-      .select('*')
-      .eq('listing_id', listingId)
-      .order('amount', { ascending: false });
-    setBids((bidsData as PublicBid[]) || []);
+    await loadAuctionBids();
 
-    const { data: related } = await supabase
+    const { data: candidates, error: candidateError } = await supabase
       .from('listings')
       .select('*, boutiques(id, name, slug, logo_url, seller_id, seller_rating_avg, seller_rating_count)')
       .eq('status', 'active')
+      .eq('moderation_status', 'approved')
       .neq('id', listingId)
-      .or(`category.eq.${(listingData as Listing).category},era.eq.${(listingData as Listing).era}`)
-      .limit(4);
-    setRelatedListings(related || []);
+      .order('views', { ascending: false })
+      .limit(80);
+    if (candidateError) {
+      setRecommendationError(`Could not load item suggestions: ${candidateError.message}`);
+      setRelatedListings([]);
+      setLoading(false);
+      return;
+    }
+
+    let wishlistPreferences: { category: string | null; era: string | null }[] = [];
+    if (user?.id) {
+      const { data: wishlist, error: wishlistError } = await supabase
+        .from('wishlists')
+        .select('listing_id')
+        .eq('user_id', user.id)
+        .limit(50);
+      if (wishlistError) {
+        setRecommendationError(`Could not personalize suggestions: ${wishlistError.message}`);
+      } else if (wishlist?.length) {
+        const { data: savedListings, error: savedListingsError } = await supabase
+          .from('listings')
+          .select('category, era')
+          .in('id', wishlist.map((item) => item.listing_id));
+        if (savedListingsError) {
+          setRecommendationError(`Could not personalize suggestions: ${savedListingsError.message}`);
+        } else {
+          wishlistPreferences = savedListings || [];
+        }
+      }
+    }
+
+    const currentListing = listingData as Listing;
+    const ranked = ((candidates || []) as ListingWithBoutique[])
+      .map((candidate) => {
+        let score = 0;
+        if (currentListing.category && candidate.category === currentListing.category) score += 3;
+        if (currentListing.era && candidate.era === currentListing.era) score += 2;
+        wishlistPreferences.forEach((preference) => {
+          if (preference.category && candidate.category === preference.category) score += 4;
+          if (preference.era && candidate.era === preference.era) score += 2;
+        });
+        score += Math.min(candidate.views || 0, 1000) / 1000;
+        return { candidate, score };
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 4)
+      .map((entry) => entry.candidate);
+    setPersonalizedRecommendations(wishlistPreferences.length > 0);
+    setRelatedListings(ranked);
 
     setLoading(false);
-  }, [listingId]);
+  }, [listingId, loadAuctionBids, user?.id]);
 
   useEffect(() => {
     loadListing();
   }, [loadListing]);
+
+  const isEnglishAuction = listing?.listing_type === 'auction' && listing.auction_mode === 'ENGLISH';
+
+  useEffect(() => {
+    if (!isEnglishAuction) return;
+
+    let active = true;
+    let subscribed = false;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    setBidLiveStatus('connecting');
+    const channel = supabase
+      .channel(`auction-bid-feed-${listingId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'auction_bid_feed',
+        filter: `listing_id=eq.${listingId}`,
+      }, () => {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => { void loadAuctionBids(); }, 100);
+      })
+      .subscribe((status) => {
+        if (!active) return;
+        if (status === 'SUBSCRIBED') {
+          subscribed = true;
+          setBidLiveStatus('live');
+          void loadAuctionBids();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          subscribed = false;
+          setBidLiveStatus('offline');
+        }
+      });
+    const fallbackRefresh = setInterval(() => {
+      if (!subscribed) void loadAuctionBids();
+    }, 15000);
+
+    return () => {
+      active = false;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      clearInterval(fallbackRefresh);
+      void supabase.removeChannel(channel);
+    };
+  }, [isEnglishAuction, listingId, loadAuctionBids]);
 
   useEffect(() => {
     const currentUserId = user?.id;
@@ -221,25 +327,21 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
     });
     if (error) {
       setBidError(error.message);
+      await loadAuctionBids();
       setBidding(false);
       return;
     }
     const result = bidRows?.[0] as BidResult | undefined;
     if (!result?.success) {
       setBidError(result?.message || 'Bid failed.');
+      await loadAuctionBids();
       setBidding(false);
       return;
     }
     setBidSuccess(true);
     setBidAmount('');
 
-    // Reload bids
-    const { data: newBids } = await supabase
-      .from('public_auction_bids')
-      .select('*')
-      .eq('listing_id', listingId)
-      .order('amount', { ascending: false });
-    setBids((newBids as PublicBid[]) || []);
+    await loadAuctionBids();
     setBidding(false);
   }
 
@@ -472,6 +574,16 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                     <p className="text-xs text-ink-500 mt-1">
                       {bids.length} bid{bids.length !== 1 ? 's' : ''}
                     </p>
+                    <p aria-live="polite" className="mt-1 flex items-center gap-1.5 text-[10px] text-ink-500">
+                      <span className={cn(
+                        'h-1.5 w-1.5 rounded-full',
+                        bidLiveStatus === 'live' ? 'bg-sage-500' : 'bg-gold-500',
+                      )} />
+                      {bidLiveStatus === 'live' ? 'Live bid updates' : bidLiveStatus === 'offline' ? 'Reconnecting; auto-refreshing' : 'Connecting to live bids…'}
+                    </p>
+                    {bidFeedError && (
+                      <p role="status" className="mt-1 max-w-xs text-[10px] text-terracotta-600">{bidFeedError}</p>
+                    )}
                   </div>
                   <div className={cn('text-right', auctionActive ? '' : 'opacity-50')}>
                     <p className="text-xs text-ink-500 uppercase tracking-wide mb-1">Time Left</p>
@@ -736,9 +848,12 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
       )}
 
       {/* Related listings */}
+      {recommendationError && <p role="status" className="mt-8 text-xs text-ink-500">{recommendationError}</p>}
       {relatedListings.length > 0 && (
         <div className="mt-12">
-          <h2 className="font-serif text-xl font-bold text-ink-900 mb-4">You May Also Like</h2>
+          <h2 className="font-serif text-xl font-bold text-ink-900 mb-4">
+            {personalizedRecommendations ? 'Recommended for You' : 'You May Also Like'}
+          </h2>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
             {relatedListings.map((item) => <ListingCard key={item.id} listing={item} />)}
           </div>

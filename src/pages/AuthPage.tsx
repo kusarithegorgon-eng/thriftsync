@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Gavel, Mail, Lock, User, Store, ShoppingBag } from 'lucide-react';
+import { Gavel, Mail, Lock, User } from 'lucide-react';
 import { useRouter } from '@/lib/router';
 import { useAuth } from '@/lib/auth';
 import { cn } from '@/lib/utils';
@@ -17,12 +17,13 @@ export function AuthPage() {
     verifySignupOtp,
     resendSignupOtp,
   } = useAuth();
+  const courierSetupRequired = Boolean(user?.courierSetupRequired);
+  const passwordSetupRequired = passwordRecovery || courierSetupRequired;
   const [mode, setMode] = useState<'signin' | 'signup' | 'reset'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [role, setRole] = useState<'buyer' | 'seller'>('buyer');
   const [awaitingOtp, setAwaitingOtp] = useState(false);
   const [otp, setOtp] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -47,7 +48,7 @@ export function AuthPage() {
       return;
     }
 
-    if (passwordRecovery) {
+    if (passwordSetupRequired) {
       if (password !== confirmPassword) {
         setError('The passwords do not match.');
         setLoading(false);
@@ -59,8 +60,11 @@ export function AuthPage() {
         clearPasswordRecovery();
         setPassword('');
         setConfirmPassword('');
-        setNotice('Your password has been updated.');
-        navigate({ name: 'home' });
+        if (courierSetupRequired) navigate({ name: 'home' });
+        else {
+          setNotice('Your password has been updated.');
+          navigate({ name: 'home' });
+        }
       }
       setLoading(false);
       return;
@@ -79,7 +83,7 @@ export function AuthPage() {
       if (signInError) setError(signInError);
       else navigate({ name: 'home' });
     } else {
-      const { error: signUpError, verificationRequired } = await signUp(email, password, displayName, role);
+      const { error: signUpError, verificationRequired } = await signUp(email, password, displayName);
       if (signUpError) setError(signUpError);
       else if (verificationRequired) {
         setAwaitingOtp(true);
@@ -109,8 +113,8 @@ export function AuthPage() {
           <h1 className="font-serif text-2xl font-bold text-ink-900">
             {awaitingOtp
               ? 'Verify your email'
-              : passwordRecovery
-                ? 'Choose a new password'
+              : passwordSetupRequired
+                ? courierSetupRequired ? 'Set your driver password' : 'Choose a new password'
                 : mode === 'signin'
                   ? 'Welcome back'
                   : mode === 'reset'
@@ -120,8 +124,10 @@ export function AuthPage() {
           <p className="text-sm text-ink-500 mt-1">
             {awaitingOtp
               ? 'Enter the one-time code or open the confirmation link in your email to finish creating your account.'
-              : passwordRecovery
-                ? 'Enter and confirm a new password for your account.'
+              : passwordSetupRequired
+                ? courierSetupRequired
+                  ? 'Create a password to finish setting up your seller-managed driver account.'
+                  : 'Enter and confirm a new password for your account.'
                 : mode === 'signin'
                   ? 'Sign in to your account to continue'
                   : mode === 'reset'
@@ -132,7 +138,7 @@ export function AuthPage() {
 
         <div className="card p-6">
           {/* Mode toggle */}
-          {!awaitingOtp && !passwordRecovery && mode !== 'reset' && <div className="flex gap-1 p-1 bg-ink-50 rounded-lg mb-5">
+          {!awaitingOtp && !passwordSetupRequired && mode !== 'reset' && <div className="flex gap-1 p-1 bg-ink-50 rounded-lg mb-5">
             <button
               onClick={() => setMode('signin')}
               className={cn(
@@ -185,8 +191,11 @@ export function AuthPage() {
                   </button>
                 </div>
               </>
-            ) : !passwordRecovery && mode === 'signup' && (
+            ) : !passwordSetupRequired && mode === 'signup' && (
               <>
+                <p className="text-xs text-ink-500">
+                  Every account can shop and sell. Create a boutique to list items and manage delivery drivers.
+                </p>
                 <div>
                   <label className="text-xs font-medium text-ink-700 mb-1.5 block">Display Name</label>
                   <div className="relative">
@@ -201,36 +210,10 @@ export function AuthPage() {
                     />
                   </div>
                 </div>
-
-                <div>
-                  <label className="text-xs font-medium text-ink-700 mb-1.5 block">I want to</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setRole('buyer')}
-                      className={cn(
-                        'flex items-center gap-2 p-3 rounded-lg border-2 transition-all text-sm font-medium',
-                        role === 'buyer' ? 'border-ink-900 bg-ink-50 text-ink-900' : 'border-ink-200 text-ink-500 hover:border-ink-300'
-                      )}
-                    >
-                      <ShoppingBag className="w-4 h-4" /> Buy
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRole('seller')}
-                      className={cn(
-                        'flex items-center gap-2 p-3 rounded-lg border-2 transition-all text-sm font-medium',
-                        role === 'seller' ? 'border-ink-900 bg-ink-50 text-ink-900' : 'border-ink-200 text-ink-500 hover:border-ink-300'
-                      )}
-                    >
-                      <Store className="w-4 h-4" /> Sell
-                    </button>
-                  </div>
-                </div>
               </>
             )}
 
-            {!awaitingOtp && !passwordRecovery && <div>
+            {!awaitingOtp && !passwordSetupRequired && <div>
               <label className="text-xs font-medium text-ink-700 mb-1.5 block">Email</label>
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-400" />
@@ -245,9 +228,9 @@ export function AuthPage() {
               </div>
             </div>}
 
-            {!awaitingOtp && (passwordRecovery || mode !== 'reset') && <div>
+            {!awaitingOtp && (passwordSetupRequired || mode !== 'reset') && <div>
               <label className="text-xs font-medium text-ink-700 mb-1.5 block">
-                {passwordRecovery ? 'New password' : 'Password'}
+                {passwordSetupRequired ? (courierSetupRequired ? 'Create password' : 'New password') : 'Password'}
               </label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-400" />
@@ -255,14 +238,14 @@ export function AuthPage() {
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={passwordRecovery ? 'At least 8 characters' : '••••••••'}
+                  placeholder={passwordSetupRequired ? 'At least 8 characters' : '••••••••'}
                   className="input-field pl-10"
-                  minLength={passwordRecovery ? 8 : undefined}
+                  minLength={passwordSetupRequired ? 8 : undefined}
                   required
                 />
               </div>
             </div>}
-            {passwordRecovery && <div>
+            {passwordSetupRequired && <div>
               <label className="text-xs font-medium text-ink-700 mb-1.5 block">Confirm new password</label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-400" />
@@ -294,19 +277,19 @@ export function AuthPage() {
                 : awaitingOtp
                   ? 'Verify email'
                   : passwordRecovery
-                    ? 'Update password'
+                    ? courierSetupRequired ? 'Finish driver setup' : 'Update password'
                     : mode === 'reset'
                       ? 'Send reset link'
                       : mode === 'signin'
                         ? 'Sign In'
                         : 'Create Account'}
             </button>
-            {!awaitingOtp && !passwordRecovery && notice && (
+            {!awaitingOtp && !passwordSetupRequired && notice && (
               <p role="status" className="text-xs text-sage-700">{notice}</p>
             )}
           </form>
 
-          {!awaitingOtp && !passwordRecovery && mode === 'signin' && (
+          {!awaitingOtp && !passwordSetupRequired && mode === 'signin' && (
             <button
               type="button"
               onClick={() => { setMode('reset'); setError(null); setNotice(null); }}
@@ -315,7 +298,7 @@ export function AuthPage() {
               Forgot password?
             </button>
           )}
-          {!awaitingOtp && !passwordRecovery && mode === 'reset' && (
+          {!awaitingOtp && !passwordSetupRequired && mode === 'reset' && (
             <button
               type="button"
               onClick={() => { setMode('signin'); setError(null); setNotice(null); }}
@@ -324,7 +307,7 @@ export function AuthPage() {
               Back to sign in
             </button>
           )}
-          {!awaitingOtp && !passwordRecovery && (mode === 'signin' || mode === 'signup') && <p className="text-xs text-ink-400 text-center mt-4">
+          {!awaitingOtp && !passwordSetupRequired && (mode === 'signin' || mode === 'signup') && <p className="text-xs text-ink-400 text-center mt-4">
             {mode === 'signin' ? "Don't have an account? " : 'Already have an account? '}
             <button
               onClick={() => setMode(mode === 'signin' ? 'signup' : 'signin')}
